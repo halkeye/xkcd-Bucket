@@ -331,6 +331,7 @@ sub irc_on_public {
     my $operator = 0;
     if (   $irc->is_channel_member( $channel, $who )
         or $irc->is_channel_operator( $mainchannel, $who )
+        or $irc->is_channel_halfop( $mainchannel, $who )
         or $irc->is_channel_owner( $mainchannel, $who )
         or $irc->is_channel_admin( $mainchannel, $who ) )
     {
