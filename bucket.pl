@@ -57,7 +57,6 @@ $|++;
 my $configfile = shift || "bucket.yml";
 my $config     = LoadFile($configfile);
 my $nick       = &config("nick") || "Bucket";
-my $pass       = &config("password") || "somethingsecret";
 $nick = DEBUG ? ( &config("debug_nick") || "bucketgoat" ) : $nick;
 my $channel =
   DEBUG
@@ -159,8 +158,11 @@ foreach my $type ( keys %gender_vars ) {
     }
 }
 
-$irc->plugin_add( 'NickServID',
-    POE::Component::IRC::Plugin::NickServID->new( Password => $pass ) );
+if (my $pass = &config("password"))
+{
+    $irc->plugin_add( 'NickServID',
+        POE::Component::IRC::Plugin::NickServID->new( Password => $pass ) );
+}
 
 POE::Component::SimpleDBI->new('db') or die "Can't create DBI session";
 
@@ -1364,14 +1366,17 @@ sub irc_on_public {
 sub db_success {
     my $res = $_[ARG0];
 
-    foreach ( keys %$res ) {
-        if (    $_ eq 'RESULT'
-            and ref $res->{RESULT} eq 'ARRAY'
-            and @{ $res->{RESULT} } > 50 )
-        {
-            print "RESULT: ", scalar @{ $res->{RESULT} }, "\n";
-        } else {
-            print "$_:\n", Dumper $res->{$_};
+    if (DEBUG)
+    {
+        foreach ( keys %$res ) {
+            if (    $_ eq 'RESULT'
+                and ref $res->{RESULT} eq 'ARRAY'
+                and @{ $res->{RESULT} } > 50 )
+            {
+                print "RESULT: ", scalar @{ $res->{RESULT} }, "\n";
+            } else {
+                print "$_:\n", Dumper $res->{$_};
+            }
         }
     }
     my %bag = ref $res->{BAGGAGE} ? %{ $res->{BAGGAGE} } : ();
@@ -2256,9 +2261,12 @@ sub db_success {
                 @random_items = ();
             }
             delete $stats{preloaded_items};
-
             &random_item_cache( $_[KERNEL] );
+        } else {
+            @inventory    = @random_items;
+            @random_items = ();
         }
+
     }
 }
 
@@ -2379,8 +2387,6 @@ sub irc_on_chan_sync {
 
 sub irc_on_connect {
     Log("Connected...");
-    Log("Identifying...");
-    &say( nickserv => "identify $pass" );
     Log("Done.");
 }
 
@@ -2516,6 +2522,7 @@ sub check_idle {
     $_[KERNEL]->delay( check_idle => 60 );
 
     my $chl = DEBUG ? $channel : $mainchannel;
+    defined $last_activity{$chl} or $last_activity{$chl} = 0;
     return
       if &config("random_wait") == 0
           or time - $last_activity{$chl} < 60 * &config("random_wait");
@@ -2850,6 +2857,18 @@ sub expand {
         my $cased = &set_case( $1, $who );
         last unless $msg =~ s/\$who\b|\${who}/$cased/i;
         $stats{last_vars}{$chl}{who} = $who;
+    }
+    
+    {
+        my $inventoryCache;
+        while ( $msg =~ /(\$inventory\b|\${inventory})/i ) {
+            unless ($inventoryCache) {
+                $inventoryCache = inventory();
+            }
+            my $cased = &set_case( $1, $inventoryCache );
+            last unless $msg =~ s/\$inventory\b|\${inventory}/$inventoryCache/i;
+            $stats{last_vars}{$chl}{inventory} = $inventoryCache;
+        }
     }
 
     if ( $msg =~ /\$someone\b|\${someone}/i ) {
