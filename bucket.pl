@@ -872,6 +872,9 @@ sub irc_on_public {
             $reply .= "and that was when I was last changed. ";
         }
 
+        defined $stats{learn} or $stats{learn} = 0;
+        defined $stats{edited} or $stats{edited} = 0;
+        defined $stats{deleted} or $stats{deleted} = 0;
         if ( $stats{learn} + $stats{edited} + $stats{deleted} ) {
             $reply .= "In that time, I ";
             my @fact_stats;
