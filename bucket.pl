@@ -365,7 +365,7 @@ sub irc_on_public {
     # == 0 - shut up by operator
     # == -1 - talking
     # > 0 - shut up by user, until time()
-    $talking{$chl} = -1 unless exists $talking{$chl};
+    $talking{$chl} = -1 unless defined $talking{$chl};
     $talking{$chl} = -1 if ( $talking{$chl} > 0 and $talking{$chl} < time );
     unless ( $talking{$chl} == -1 or ( $operator and $addressed ) ) {
         if ( $addressed and &config("increase_mute") and $talking{$chl} > 0 ) {
