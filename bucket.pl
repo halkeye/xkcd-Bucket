@@ -377,6 +377,7 @@ sub irc_on_public {
         return;
     }
 
+    defined $stats{last_updated} or $stats{last_updated} = 0;
     if ( time - $stats{last_updated} > 600 ) {
         &get_stats( $_[KERNEL] );
         &clear_cache();
