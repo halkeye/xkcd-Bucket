@@ -74,6 +74,7 @@ my @inventory;
 my @random_items;
 my %replacables;
 my %history;
+my $bucket_log_fh;
 
 my %config_keys = (
     bananas_chance         => [ "p", 0.02 ],
@@ -2319,10 +2320,10 @@ sub irc_start {
 
     $_[KERNEL]->delay( check_idle => 60 );
 
-    if ( &config("bucketlog") and -f &config("bucketlog") and open BLOG,
+    if ( &config("bucketlog") and -f &config("bucketlog") and open $bucket_log_fh,
         &config("bucketlog") )
     {
-        seek BLOG, 0, SEEK_END;
+        seek $bucket_log_fh, 0, SEEK_END;
     }
 }
 
@@ -2507,15 +2508,16 @@ sub get_stats {
 
 sub tail {
     my $kernel = shift;
+    return unless $bucket_log_fh;
 
     my $time = 1;
-    while (<BLOG>) {
+    while (<$bucket_log_fh>) {
         chomp;
         s/^[\d-]+ [\d:]+ //;
         s/from [\d.]+ //;
         Report $time++, $_;
     }
-    seek BLOG, 0, SEEK_CUR;
+    seek $bucket_log_fh, 0, SEEK_CUR;
 }
 
 sub check_idle {
