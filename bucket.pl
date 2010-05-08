@@ -328,7 +328,7 @@ sub irc_on_public {
     }
 
     # keep track of who's active in each channel
-    $stats{users}{$chl}{$who} = time;
+    $stats{users}{$chl}{lc $who} = time;
 
     unless ( exists $stats{users}{genders}{ lc $who } ) {
         &load_gender($who);
@@ -2612,10 +2612,9 @@ sub someone {
 
 sub clear_cache {
     foreach my $channel ( keys %{ $stats{users} } ) {
+        next unless $channel =~ /^#/;
         foreach my $user ( keys %{ $stats{users}{$channel} } ) {
             delete $stats{users}{$channel}{$user}
-              if $stats{users}{$channel}{$user} <
-                  time - &config("user_activity_timeout");
         }
     }
 
