@@ -32,6 +32,9 @@ use Data::Dumper;
 use Fcntl qw/:seek/;
 use HTML::Entities;
 use URI::Escape;
+use LWP::Simple;
+use XML::Simple;
+
 $Data::Dumper::Indent = 1;
 
 # try to load Math::BigFloat if possible
@@ -3103,10 +3106,6 @@ sub read_rss {
     my ( $url, $re, $tag ) = @_;
 
     eval {
-      require LWP::Simple;
-      import LWP::Simple qw/$ua/;
-      require XML::Simple;
-
       $LWP::Simple::ua->timeout(10);
       my $rss = LWP::Simple::get($url);
       if ($rss) {
