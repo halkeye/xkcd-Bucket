@@ -2677,7 +2677,9 @@ sub clear_cache {
     foreach my $channel ( keys %{ $stats{users} } ) {
         next unless $channel =~ /^#/;
         foreach my $user ( keys %{ $stats{users}{$channel} } ) {
-            delete $stats{users}{$channel}{$user}
+            next unless $stats{users}{$channel}{$user} <
+                time - &config("user_activity_timeout");
+            delete $stats{users}{$channel}{$user};
         }
     }
 
