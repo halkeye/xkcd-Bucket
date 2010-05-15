@@ -191,9 +191,14 @@ POE::Session->create(
         irc_331          => \&irc_on_jointopic,
         irc_nick         => \&irc_on_nick,
         irc_chan_sync    => \&irc_on_chan_sync,
+        irc_socketerr    => \&irc_on_socketerr,
         db_success       => \&db_success,
         delayed_post     => \&delayed_post,
         check_idle       => \&check_idle,
+#        _default           => sub { 
+#             my ($event, $args) = @_[ARG0 .. $#_];
+#             print STDERR Data::Dumper::Dumper($event, $args);
+#        },
     },
 );
 
@@ -2353,7 +2358,7 @@ sub irc_start {
         db       => 'CONNECT',
         DSN      => &config("db_dsn"),
         USERNAME => &config("db_username"),
-        PASSWORD => &config("db_password"),
+        PASSWORD => &config("db_password") || '',
         EVENT    => 'db_success',
     );
 
@@ -2409,6 +2414,7 @@ sub irc_on_notice {
 
     Log("Notice from $who: $msg");
 
+    ### FIXME - this only works if nickserv is enabled, there must be a better system?
     return if $stats{identified};
     if (
         lc $who eq lc &config("nickserv_nick")
@@ -2474,6 +2480,12 @@ sub irc_on_chan_sync {
 sub irc_on_connect {
     Log("Connected...");
     Log("Done.");
+}
+
+sub irc_on_socketerr {
+    my ($err_msg) = @_[ARG0 .. $#_];
+    Log("Error Connecting.." . $err_msg);
+    die();
 }
 
 sub irc_on_disconnect {
