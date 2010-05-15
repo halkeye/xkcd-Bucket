@@ -12,3 +12,6 @@ http://wiki.xkcd.com/irc/Bucket#Docs
 
 Any bugs, feature requests or questions should be directed to zigdon at
 irc.foonetic.net.
+
+Easy way (using cpanm) to install missing modules
+prove t/000_dependencies.t 2>&1 | grep "Tried to" | awk -F "'" '{print $2}' | sudo cpanm
