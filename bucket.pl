@@ -2343,11 +2343,7 @@ sub db_success {
             }
             delete $stats{preloaded_items};
             &random_item_cache( $_[KERNEL] );
-        } else {
-            @inventory    = @random_items;
-            @random_items = ();
         }
-
     }
 }
 
