@@ -2631,14 +2631,15 @@ sub check_idle {
     $_[KERNEL]->delay( check_idle => 60 );
 
     my $chl = DEBUG ? $channel : $mainchannel;
-    defined $last_activity{$chl} or $last_activity{$chl} = time;
+    $last_activity{$chl} ||= time;
     return
       if &config("random_wait") == 0
           or time - $last_activity{$chl} < 60 * &config("random_wait");
 
+    $stats{last_idle_time}{$chl} ||= time;
     return if $stats{last_idle_time}{$chl} > $last_activity{$chl};
 
-    $stats{last_idle_time}{$chl} = time;
+    $stats{last_idle_time}{$chl} ||= time;
 
     my %sources = (
         MLIA => [
