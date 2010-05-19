@@ -192,6 +192,7 @@ POE::Session->create(
         irc_nick         => \&irc_on_nick,
         irc_chan_sync    => \&irc_on_chan_sync,
         irc_socketerr    => \&irc_on_socketerr,
+        irc_invite       => \&irc_on_invite,
         db_success       => \&db_success,
         delayed_post     => \&delayed_post,
         check_idle       => \&check_idle,
@@ -2493,6 +2494,15 @@ sub irc_on_disconnect {
     close LOG;
     $irc->call( unregister => 'all' );
     exit;
+}
+sub irc_on_invite { 
+    my ($who, $channel) = @_[ARG0 .. $#_];
+    Log("Invited to $channel by $who");
+    if ($channel eq &config("logchannel") || $config->{autojoin}->{$channel})
+    {
+        Log("... In auto-join list, joining");
+        $irc->yield( join => $channel );
+    }
 }
 
 sub save {
