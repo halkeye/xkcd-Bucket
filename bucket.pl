@@ -2495,6 +2495,7 @@ sub irc_on_disconnect {
     $irc->call( unregister => 'all' );
     exit;
 }
+
 sub irc_on_invite { 
     my ($who, $channel) = @_[ARG0 .. $#_];
     Log("Invited to $channel by $who");
