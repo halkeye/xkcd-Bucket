@@ -537,7 +537,7 @@ sub irc_on_public {
         }
     } elsif (
         $addressed
-        and $msg =~ /^(?:shut \s up | go \s away)
+        and $msg =~ /^(?:shut\s*up | go \s away)
                       (?: \s for \s (\d+)([smh])?|
                           \s for \s a \s (bit|moment|while|min(?:ute)?))?[.!]?$/xi
       )
@@ -2632,14 +2632,15 @@ sub check_idle {
 
     my $chl = DEBUG ? $channel : $mainchannel;
     $last_activity{$chl} ||= time;
+
     return
       if &config("random_wait") == 0
           or time - $last_activity{$chl} < 60 * &config("random_wait");
 
-    $stats{last_idle_time}{$chl} ||= time;
+    defined $stats{last_idle_time}{$chl} or $stats{last_idle_time}{$chl} = 0;
     return if $stats{last_idle_time}{$chl} > $last_activity{$chl};
 
-    $stats{last_idle_time}{$chl} ||= time;
+    $stats{last_idle_time}{$chl} = time;
 
     my %sources = (
         MLIA => [
@@ -2931,7 +2932,7 @@ sub lookup {
         @placeholders = @{ $params{msgs} };
         $type         = "multiple";
     } else {
-        $sql  = "1";
+        $sql  = "1=1";
         $type = "none";
     }
 
@@ -3239,11 +3240,16 @@ sub read_rss {
       if ($rss) {
           Log "Retrieved RSS";
           my $xml = XML::Simple::XMLin($rss);
+          if (!$xml) {
+              Report "No XML available for $url";
+              return ();
+          }
           for ( 1 .. 5 ) {
-              if ( $xml and my $story = $xml->{channel}{item}[ rand(40) ] ) {
+              if ( my $story = $xml->{channel}{item}[ rand(40) ] ) {
                   $story->{description} =
                     HTML::Entities::decode_entities( $story->{description} );
                   $story->{description} =~ s/$re//isg if $re;
+                  Log Data::Dumper::Dumper($story, $url);
                   next if $url =~ /twitter/ and $story->{description} =~ /^@/;
                   next if length $story->{description} > 400;
                   next if $story->{description} =~ /\[\.\.\.\]/;
