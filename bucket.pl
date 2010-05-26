@@ -67,14 +67,13 @@ my $channel =
   DEBUG
   ? ( &config("debug_channel") || "#bucket" )
   : ( &config("control_channel") || "#billygoat" );
-my ($irc) = POE::Component::IRC::State->spawn();
 my %channels = ( $channel => 1 );
 
 # Main Channel is the primary channel, idle and access checks will be based on this place
 my $mainchannel = &config("main_channel") || "#xkcd";
 my %talking;
 my %fcache;
-my %stats;
+our %stats;
 my %undo;
 my %last_activity;
 my @inventory;
@@ -111,7 +110,7 @@ my %config_keys = (
     www_url                => [ s => "" ],
 );
 
-my %gender_vars = (
+our %gender_vars = (
     subjective => {
         male        => "he",
         female      => "she",
@@ -171,44 +170,49 @@ foreach my $type ( keys %gender_vars ) {
     }
 }
 
-if (my $pass = &config("password"))
+my $irc;
+unless ($ENV{'SKIP_INIT'})
 {
-    $irc->plugin_add( 'NickServID',
-        POE::Component::IRC::Plugin::NickServID->new( Password => $pass ) );
+    ($irc) = POE::Component::IRC::State->spawn();
+    if (my $pass = &config("password"))
+    {
+        $irc->plugin_add( 'NickServID',
+            POE::Component::IRC::Plugin::NickServID->new( Password => $pass ) );
+    }
+
+    POE::Component::SimpleDBI->new('db') or die "Can't create DBI session";
+
+    POE::Session->create(
+        inline_states => {
+            _start           => \&irc_start,
+            irc_001          => \&irc_on_connect,
+            irc_kick         => \&irc_on_kick,
+            irc_public       => \&irc_on_public,
+            irc_ctcp_action  => \&irc_on_public,
+            irc_msg          => \&irc_on_public,
+            irc_notice       => \&irc_on_notice,
+            irc_disconnected => \&irc_on_disconnect,
+            irc_topic        => \&irc_on_topic,
+            irc_join         => \&irc_on_join,
+            irc_332          => \&irc_on_jointopic,
+            irc_331          => \&irc_on_jointopic,
+            irc_nick         => \&irc_on_nick,
+            irc_chan_sync    => \&irc_on_chan_sync,
+            irc_socketerr    => \&irc_on_socketerr,
+            irc_invite       => \&irc_on_invite,
+            db_success       => \&db_success,
+            delayed_post     => \&delayed_post,
+            check_idle       => \&check_idle,
+    #        _default           => sub { 
+    #             my ($event, $args) = @_[ARG0 .. $#_];
+    #             print STDERR Data::Dumper::Dumper($event, $args);
+    #        },
+        },
+    );
+
+    POE::Kernel->run;
+    print "POE::Kernel has left the building.\n";
 }
-
-POE::Component::SimpleDBI->new('db') or die "Can't create DBI session";
-
-POE::Session->create(
-    inline_states => {
-        _start           => \&irc_start,
-        irc_001          => \&irc_on_connect,
-        irc_kick         => \&irc_on_kick,
-        irc_public       => \&irc_on_public,
-        irc_ctcp_action  => \&irc_on_public,
-        irc_msg          => \&irc_on_public,
-        irc_notice       => \&irc_on_notice,
-        irc_disconnected => \&irc_on_disconnect,
-        irc_topic        => \&irc_on_topic,
-        irc_join         => \&irc_on_join,
-        irc_332          => \&irc_on_jointopic,
-        irc_331          => \&irc_on_jointopic,
-        irc_nick         => \&irc_on_nick,
-        irc_chan_sync    => \&irc_on_chan_sync,
-        irc_socketerr    => \&irc_on_socketerr,
-        irc_invite       => \&irc_on_invite,
-        db_success       => \&db_success,
-        delayed_post     => \&delayed_post,
-        check_idle       => \&check_idle,
-#        _default           => sub { 
-#             my ($event, $args) = @_[ARG0 .. $#_];
-#             print STDERR Data::Dumper::Dumper($event, $args);
-#        },
-    },
-);
-
-POE::Kernel->run;
-print "POE::Kernel has left the building.\n";
 
 sub Log {
     print scalar localtime, " - @_\n";
