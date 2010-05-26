@@ -434,20 +434,36 @@ sub irc_on_public {
         my ( $fact, $old, $new, $flag ) = ( $1, $3, $4, $5 );
         Report "$who is editing $fact in $chl: replacing '$old' with '$new'";
         Log "Editing $fact: replacing '$old' with '$new'";
-        $_[KERNEL]->post(
-            db  => 'MULTIPLE',
-            SQL => 'select * ' . 'from bucket_facts where fact = ? order by id',
-            PLACEHOLDERS => [$fact],
-            BAGGAGE      => {
-                %bag,
-                cmd   => "edit",
-                fact  => $fact,
-                old   => $old,
-                'new' => $new,
-                flag  => $flag,
-            },
-            EVENT => 'db_success'
-        );
+        if ( $fact =~ /^#(\d+)$/ ) {
+            $_[KERNEL]->post(
+                db           => 'MULTIPLE',
+                SQL          => 'select * from bucket_facts where id = ?',
+                PLACEHOLDERS => [$1],
+                BAGGAGE      => {
+                    %bag,
+                    cmd   => "edit",
+                    old   => $old,
+                    'new' => $new,
+                    flag  => $flag,
+                },
+                EVENT => 'db_success'
+            );
+        } else {
+            $_[KERNEL]->post(
+                db  => 'MULTIPLE',
+                SQL => 'select * from bucket_facts where fact = ? order by id',
+                PLACEHOLDERS => [$fact],
+                BAGGAGE      => {
+                    %bag,
+                    cmd   => "edit",
+                    fact  => $fact,
+                    old   => $old,
+                    'new' => $new,
+                    flag  => $flag,
+                },
+                EVENT => 'db_success'
+            );
+        }
     } elsif (
         $msg =~ m{ (.*?)             # $1 key to look up
                    \s+(?:=~|~=)\s+   # match operator
@@ -466,7 +482,6 @@ sub irc_on_public {
         &lookup(
             %bag,
             msg      => $msg,
-            editable => 0,
             search   => $search,
         );
     } elsif ( $msg =~ /^literal(?:\[([*\d]+)\])?\s+(.*)/i ) {
@@ -503,24 +518,26 @@ sub irc_on_public {
         @inventory = grep { $_ ne $item } @inventory;
         &sql( "delete from bucket_items where `what` = ?", [$item] );
         delete $stats{detailed_inventory}{$who}[$num];
-    } elsif ( $addressed and $operator and $msg =~ /^delete (#)?(.+)/i ) {
-        my $id   = $1;
-        my $fact = $2;
+    } elsif ( $addressed and $operator and $msg =~ /^delete ((#)?.+)/i ) {
+        my $id   = $2;
+        my $fact = $1;
         $stats{deleted}++;
 
         if ($id) {
-            $_[KERNEL]->post(
-                db  => "SINGLE",
-                SQL => "select fact, tidbit, verb, RE, protected, mood, chance
-                                       from bucket_facts where id = ?",
-                PLACEHOLDERS => [$fact],
-                EVENT        => "db_success",
-                BAGGAGE      => {
-                    %bag,
-                    cmd  => "delete_id",
-                    fact => $fact,
-                }
-            );
+            while ($fact =~ s/#(\d+)\s*//) {
+                $_[KERNEL]->post(
+                    db  => "SINGLE",
+                    SQL => "select fact, tidbit, verb, RE, protected, mood, chance
+                                           from bucket_facts where id = ?",
+                    PLACEHOLDERS => [$1],
+                    EVENT        => "db_success",
+                    BAGGAGE      => {
+                        %bag,
+                        cmd  => "delete_id",
+                        fact => $1,
+                    }
+                );
+            };
         } else {
             $_[KERNEL]->post(
                 db  => "MULTIPLE",
@@ -982,10 +999,16 @@ sub irc_on_public {
     } elsif ( $operator and $addressed and $msg =~ /^get (\w+)/ ) {
         my ($key) = ($1);
         unless ( exists $config_keys{$key} ) {
-            &say(
-                $chl => "$who: Valid keys are: " . join ", ",
-                sort keys %config_keys
-            );
+            my @keys = sort keys %config_keys;
+            my $list = "$who: Valid keys are: ";
+            while (@keys) {
+                while ( length $list < 350 and @keys ) {
+                    $list .= shift(@keys) . "; ";
+                }
+
+                &say( $chl => $list );
+                $list = "$who: ";
+            }
             return;
         }
 
@@ -1375,9 +1398,10 @@ sub irc_on_public {
                 $msg = $nick;
             }
 
-            if ( not $operator and
-                 $type eq 'irc_public' and
-                 &config("repeated_queries") > 0 ) {
+            if (    not $operator
+                and $type eq 'irc_public'
+                and &config("repeated_queries") > 0 )
+            {
                 unless ( $stats{users}{$chl}{$who}{last_lookup} ) {
                     $stats{users}{$chl}{$who}{last_lookup} = [ $msg, 0 ];
                 }
@@ -1955,8 +1979,10 @@ sub db_success {
         $gflag = ( $bag{op} and $bag{flag} =~ s/g//g );
         $iflag = ( $bag{flag} =~ s/i//g ? "i" : "" );
         my $count = 0;
-        $undo{ $bag{chl} } =
-          [ 'edit', $bag{who}, [], "$bag{fact} =~ s/$bag{old}/$bag{new}/" ];
+        $undo{ $bag{chl} } = [
+            'edit', $bag{who},
+            [],     "$lines[0]->{fact} =~ s/$bag{old}/$bag{new}/"
+        ];
 
         foreach my $line (@lines) {
             my $fact = "$line->{verb} $line->{tidbit}";
@@ -1971,10 +1997,10 @@ sub db_success {
 
             if ( $fact =~ /\S/ ) {
                 $stats{edited}++;
-                Report "$bag{who} edited $bag{fact}($line->{id})"
+                Report "$bag{who} edited $line->{fact}(#$line->{id})"
                   . " in $bag{chl}: New values: $fact";
-                Log
-                  "$bag{who} edited $bag{fact}($line->{id}): New values: $fact";
+                Log "$bag{who} edited $line->{fact}($line->{id}): "
+                  . "New values: $fact";
                 my ( $verb, $tidbit );
                 if ( $fact =~ /^<(\w+)>\s*(.*)/ ) {
                     ( $verb, $tidbit ) = ( "<$1>", $2 );
@@ -1990,9 +2016,9 @@ sub db_success {
                   [ 'update', $line->{id}, $line->{verb}, $line->{tidbit} ];
             } elsif ( $bag{op} ) {
                 $stats{deleted}++;
-                Report "$bag{who} deleted $bag{fact}($line->{id})"
+                Report "$bag{who} deleted $line->{fact}($line->{id})"
                   . " in $bag{chl}: $line->{verb} $line->{tidbit}";
-                Log "$bag{who} deleted $bag{fact}($line->{id}):"
+                Log "$bag{who} deleted $line->{fact}($line->{id}):"
                   . " $line->{verb} $line->{tidbit}";
                 &sql(
                     'delete from bucket_facts where id=? limit 1',
@@ -2001,7 +2027,7 @@ sub db_success {
                 push @{ $undo{ $bag{chl} }[2] }, [ 'insert', {%$line} ];
             } else {
                 &error( $bag{chl}, $bag{who} );
-                Log "$bag{who}: $bag{fact} =~ s/// failed";
+                Log "$bag{who}: $line->{fact} =~ s/// failed";
             }
 
             if ($gflag) {
@@ -2009,9 +2035,9 @@ sub db_success {
             }
             &say( $bag{chl} => "Okay, $bag{who}, factoid updated." );
 
-            if ( exists $fcache{ lc $bag{fact} } ) {
-                Log "Updating cache for '$bag{fact}'";
-                &cache( $_[KERNEL], $bag{fact} );
+            if ( exists $fcache{ lc $line->{fact} } ) {
+                Log "Updating cache for '$line->{fact}'";
+                &cache( $_[KERNEL], $line->{fact} );
             }
             return;
         }
@@ -2140,9 +2166,6 @@ sub db_success {
             delete $bag{also};
         }
 
-        Report "$bag{who} taught in $bag{chl}:"
-          . " '$bag{fact}', '$bag{verb}', '$bag{tidbit}'";
-        Log "$bag{who} taught '$bag{fact}', '$bag{verb}', '$bag{tidbit}'";
         &sql(
             'insert bucket_facts (fact, verb, tidbit, protected)
                      values (?, ?, ?, ?)',
@@ -2157,6 +2180,10 @@ sub db_success {
             ];
 
             $stats{last_fact}{ $bag{chl} } = $res->{INSERTID};
+
+            Report "$bag{who} taught in $bag{chl} (#$res->{INSERTID}):"
+              . " '$bag{fact}', '$bag{verb}', '$bag{tidbit}'";
+            Log "$bag{who} taught '$bag{fact}', '$bag{verb}', '$bag{tidbit}'";
         }
         my $ack;
         if ( $bag{also} ) {
@@ -2663,6 +2690,7 @@ sub check_idle {
         factoid => 1
     );
     my $source = &config("idle_source");
+
     if ( $source eq 'random' ) {
         $source = ( keys %sources )[ rand keys %sources ];
     }
