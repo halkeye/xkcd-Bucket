@@ -61,12 +61,16 @@ my $configfile = shift || "bucket.yml";
 my $config     = LoadFile($configfile);
 my $nick       = &config("nick") || "Bucket";
 $nick = DEBUG ? ( &config("debug_nick") || "bucketgoat" ) : $nick;
+
+# What channel to use as a control channel
 my $channel =
   DEBUG
   ? ( &config("debug_channel") || "#bucket" )
   : ( &config("control_channel") || "#billygoat" );
 my ($irc) = POE::Component::IRC::State->spawn();
 my %channels = ( $channel => 1 );
+
+# Main Channel is the primary channel, idle and access checks will be based on this place
 my $mainchannel = &config("main_channel") || "#xkcd";
 my %talking;
 my %fcache;
