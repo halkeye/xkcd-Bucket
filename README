@@ -1,4 +1,4 @@
-Bucket is one of the 3 bots living in the IRC channel for #xkcd.  The source
+Bucket is one of the 3 bots living in the IRC channel for xkcd.  The source
 code for the bot is available here, as well as a sample database with a very
 minimal config.
 
@@ -11,7 +11,8 @@ Bucket's documentation is (poorly) maintained here:
 http://wiki.xkcd.com/irc/Bucket#Docs
 
 Any bugs, feature requests or questions should be directed to zigdon at
-irc.foonetic.net.
+irc.foonetic.net.  Or, ask people in #xkcd and #bucket there - many have years
+of experience with Bucket.
 
 Easy way (using cpanm) to install missing modules
 prove t/000_dependencies.t 2>&1 | grep "Tried to" | awk -F "'" '{print $2}' | sudo cpanm

@@ -50,8 +50,6 @@ use constant { DEBUG => 0 };
 # work around a bug: https://rt.cpan.org/Ticket/Display.html?id=50991
 sub s_form { return Lingua::EN::Conjugate::s_form(@_); }
 
-my $VERSION = '$Id: bucket.pl 685 2009-08-04 19:15:15Z dan $';
-
 $SIG{CHLD} = 'IGNORE';
 
 $|++;
@@ -87,6 +85,7 @@ my %config_keys = (
     band_name              => [ p => 5 ],
     band_var               => [ s => 'band' ],
     ex_to_sex              => [ p => 1 ],
+    file_input             => [ f => "" ],
     haiku_report           => [ i => 1 ],
     hide_hostmask          => [ b => 0 ],
     history_size           => [ i => 30 ],
@@ -105,9 +104,9 @@ my %config_keys = (
     user_activity_timeout  => [ i => 360 ],
     user_mode              => [ s => "+B" ],
     value_cache_limit      => [ i => 1000 ],
-    your_mom_is            => [ p => 5 ],
     www_root               => [ s => "" ],
     www_url                => [ s => "" ],
+    your_mom_is            => [ p => 5 ],
 );
 
 our %gender_vars = (
@@ -162,6 +161,14 @@ if ( &config("logfile") ) {
       or die "Can't write " . &config("logfile") . ": $!";
 }
 
+# make sure the file_input file is empty, if it is defined
+# (so that we don't delete anything important by mistake)
+if ( &config("file_input") and -f &config("file_input") ) {
+    &Log(   "Ignoring the file_input directive since that file already exists "
+          . "at startup" );
+    delete $config->{file_input};
+}
+
 # set up gender aliases
 foreach my $type ( keys %gender_vars ) {
     foreach my $alias ( @{ $gender_vars{$type}{aliases} } ) {
@@ -202,13 +209,15 @@ unless ($ENV{'SKIP_INIT'})
             irc_invite       => \&irc_on_invite,
             db_success       => \&db_success,
             delayed_post     => \&delayed_post,
-            check_idle       => \&check_idle,
+	    heartbeat        => \&heartbeat,
     #        _default           => sub { 
     #             my ($event, $args) = @_[ARG0 .. $#_];
     #             print STDERR Data::Dumper::Dumper($event, $args);
     #        },
         },
     );
+    $irc->plugin_add( 'NickServID',
+	    POE::Component::IRC::Plugin::NickServID->new( Password => $pass ) );
 
     POE::Kernel->run;
     print "POE::Kernel has left the building.\n";
@@ -324,7 +333,10 @@ sub irc_on_public {
                 Report sprintf "<%s> %s", @{ $haiku[0] };
                 Report sprintf "<%s> %s", @{ $haiku[1] };
                 Report sprintf "<%s> %s", @{ $haiku[2] };
-                &cached_reply( $chl, $who, "", "haiku detected" );
+
+                if ( $talking{$chl} == -1 ) {
+                    &cached_reply( $chl, $who, "", "haiku detected" );
+                }
                 $stats{haiku}++;
 
                 &sql(
@@ -372,8 +384,8 @@ sub irc_on_public {
             and time - $stats{last_talk}{$chl}{$who}{when} <
             &config("user_activity_timeout") )
         {
-            Report "Ignoring $who who is flooding in $chl.";
             if ( $stats{last_talk}{$chl}{$who}{count} == 21 ) {
+                Report "Ignoring $who who is flooding in $chl.";
                 &say( $chl =>
                       "$who, I'm a bit busy now, try again in 5 minutes?" );
             }
@@ -489,8 +501,8 @@ sub irc_on_public {
         Log "Looking up a particular factoid - '$search' in '$fact'";
         &lookup(
             %bag,
-            msg      => $msg,
-            search   => $search,
+            msg    => $msg,
+            search => $search,
         );
     } elsif ( $msg =~ /^literal(?:\[([*\d]+)\])?\s+(.*)/i ) {
         my ( $page, $fact ) = ( $1 || 1, $2 );
@@ -532,10 +544,11 @@ sub irc_on_public {
         $stats{deleted}++;
 
         if ($id) {
-            while ($fact =~ s/#(\d+)\s*//) {
+            while ( $fact =~ s/#(\d+)\s*// ) {
                 $_[KERNEL]->post(
-                    db  => "SINGLE",
-                    SQL => "select fact, tidbit, verb, RE, protected, mood, chance
+                    db => "SINGLE",
+                    SQL =>
+                      "select fact, tidbit, verb, RE, protected, mood, chance
                                            from bucket_facts where id = ?",
                     PLACEHOLDERS => [$1],
                     EVENT        => "db_success",
@@ -545,7 +558,7 @@ sub irc_on_public {
                         fact => $1,
                     }
                 );
-            };
+            }
         } else {
             $_[KERNEL]->post(
                 db  => "MULTIPLE",
@@ -572,7 +585,7 @@ sub irc_on_public {
         if ($operator) {
             my $target = 0;
             unless ( $num or $word ) {
-                $num = 4 * 60 * 60;    # by default, shut up for 4 hours
+                $num = 60 * 60;    # by default, shut up for one hour
             }
             if ($num) {
                 $target += $num if not $unit or $unit eq 's';
@@ -603,13 +616,16 @@ sub irc_on_public {
     {
         &say( $chl => "\\o/" );
         $talking{$chl} = -1;
-    } elsif ( $addressed and $operator and $msg =~ /^(join|part) (#[-\w]+)/i ) {
-        my ( $cmd, $dst ) = ( $1, $2 );
+    } elsif ( $addressed
+        and $operator
+        and $msg =~ /^(join|part) (#[-\w]+)(?: (.*))?/i )
+    {
+        my ( $cmd, $dst, $msg ) = ( $1, $2, $3 );
         unless ($dst) {
             &say( $chl => "$who: $cmd what channel?" );
             return;
         }
-        $irc->yield( $cmd => $dst );
+        $irc->yield( $cmd => $dst, $msg );
         &say( $chl => "$who: ${cmd}ing $dst" );
         Report "${cmd}ing $dst at ${who}'s request";
     } elsif ( $addressed and $operator and lc $msg eq 'list ignored' ) {
@@ -857,7 +873,7 @@ sub irc_on_public {
         &say(   $chl => "$who, that was '$line', with $count syllable"
               . &s($count) );
 
-    } elsif ( $addressed and $msg =~ /^what was that\??$/ ) {
+    } elsif ( $addressed and $msg =~ /^what was that\??$/i ) {
         my $id = $stats{last_fact}{$chl};
         unless ($id) {
             &say( $chl => "Sorry, $who, I have no idea." );
@@ -994,6 +1010,13 @@ sub irc_on_public {
             $config->{$key} = $val;
         } elsif ( $config_keys{$key}[0] eq 'b' and $val =~ /^(true|false)$/ ) {
             $config->{$key} = $val eq 'true';
+        } elsif ( $config_keys{$key}[0] eq 'f' and length $val ) {
+            if ( -f $val ) {
+                &say( $chl => "Sorry, $who, $val already exists." );
+                return;
+            } else {
+                $config->{$key} = $val;
+            }
         } else {
             &say( $chl => "Sorry, $who, that's an invalid value for $key." );
             return;
@@ -1243,7 +1266,7 @@ sub irc_on_public {
         foreach my $item ( sort @inventory ) {
             $c++;
             push @{ $stats{detailed_inventory}{$who} }, $item;
-            if ( length $line + length "$c. $item; " < 350 ) {
+            if ( length($line) + length("$c. $item; ") < 350 ) {
                 $line .= "$c. $item; ";
                 next;
             }
@@ -1371,11 +1394,13 @@ sub irc_on_public {
         }
 
         Log "$who set ${target}'s gender to $gender";
-        $stats{users}{genders}{ lc $target } = $gender;
+        $stats{users}{genders}{ lc $target } = lc $gender;
         &sql( "replace genders (nick, gender, stamp) values (?, ?, ?)",
             [ $target, $gender, undef ] );
         &say( $chl => "Okay, $who" );
-    } elsif ( $addressed and $msg =~ /^what is my gender\??$/i ) {
+    } elsif ( $addressed
+        and $msg =~ /^what is my gender\??$|^what gender am I\??/i )
+    {
         if ( exists $stats{users}{genders}{ lc $who } ) {
             &say(
                 $chl => "$who: Grammatically, I refer to you as",
@@ -1477,7 +1502,7 @@ sub db_success {
         if ( $res->{ERROR} eq 'Lost connection to the database server.' ) {
             Report "DB Error: $res->{ERROR}  Restarting.";
             Log "DB Error: $res->{ERROR}";
-            &say( $channel => "Lost my database!  I'll be right back." );
+            &say( $channel => "Database lost.  Self-destruct initialized." );
             $irc->yield( quit => "Eep, the house is on fire!" );
             return;
         }
@@ -1831,7 +1856,7 @@ sub db_success {
         }
     } elsif ( $bag{cmd} eq 'load_gender' ) {
         my %line = ref $res->{RESULT} ? %{ $res->{RESULT} } : ();
-        $stats{users}{genders}{ lc $bag{nick} } = $line{gender}
+        $stats{users}{genders}{ lc $bag{nick} } = lc $line{gender}
           || "androgynous";
     } elsif ( $bag{cmd} eq 'load_vars' ) {
         my @lines = ref $res->{RESULT} ? @{ $res->{RESULT} } : [];
@@ -2169,6 +2194,11 @@ sub db_success {
             }
         }
 
+        if ( lc $bag{verb} eq '<alias>' ) {
+            &say( $bag{chl} => "$bag{who}, please use the 'alias' command." );
+            return;
+        }
+
         # we said 'is also' but we didn't get any existing results
         if ( $bag{also} and $res->{RESULT} ) {
             delete $bag{also};
@@ -2431,17 +2461,19 @@ sub irc_start {
             Username => &config("username") || "bucket",
             Ircname  => &config("irc_name") || "YABI",
             Server   => &config("server") || "irc.foonetic.net",
+            Port     => &config("port") || "6667",
             Flood    => 0,
         }
     );
-
-    $_[KERNEL]->delay( check_idle => 60 );
 
     if ( &config("bucketlog") and -f &config("bucketlog") and open $bucket_log_fh,
         &config("bucketlog") )
     {
         seek $bucket_log_fh, 0, SEEK_END;
     }
+
+    $_[KERNEL]->delay( heartbeat => 10 );
+
 }
 
 sub irc_on_notice {
@@ -2663,8 +2695,43 @@ sub tail {
     seek $bucket_log_fh, 0, SEEK_CUR;
 }
 
-sub check_idle {
-    $_[KERNEL]->delay( check_idle => 60 );
+sub heartbeat {
+    $_[KERNEL]->delay( heartbeat => 60 );
+
+    if ( my $file_input = &config("file_input") ) {
+        rename $file_input, "$file_input.processing";
+        if ( open FI, "$file_input.processing" ) {
+            while (<FI>) {
+                chomp;
+                my ( $output, $who, $msg ) = split ' ', $_, 3;
+                $msg =~ s/\s\s+/ /g;
+                $msg =~ s/^\s+|\s+$//g;
+                $msg = &trim($msg);
+
+                Log "file input: $output, $who: $msg";
+
+                if ( $msg eq 'something random' ) {
+                    &lookup(
+                        editable  => 0,
+                        addressed => 1,
+                        chl       => $output,
+                        who       => &someone($channel),
+                    );
+                } else {
+                    &lookup(
+                        editable  => 0,
+                        addressed => 1,
+                        chl       => $output,
+                        who       => $who,
+                        msg       => $msg,
+                    );
+                }
+            }
+
+            close FI;
+        }
+        unlink "$file_input.processing";
+    }
 
     my $chl = DEBUG ? $channel : $mainchannel;
     $last_activity{$chl} ||= time;
@@ -2912,6 +2979,17 @@ sub say {
     my $chl  = shift;
     my $text = "@_";
 
+    if ( $chl =~ m#^/# ) {
+        Log "Writing to '$chl'";
+        if ( open FO, ">>", $chl ) {
+            print FO "S $text\n";
+            close FO;
+        } else {
+            Log "Failed to write to $chl: $!";
+        }
+        return;
+    }
+
     if ( &config("haiku_report") ) {
         ( $stats{haiku_debug}{$chl}{count}, $stats{haiku_debug}{$chl}{line} ) =
           &count_syllables($text);
@@ -2926,6 +3004,16 @@ sub say {
 sub do {
     my $chl    = shift;
     my $action = "@_";
+
+    if ( $chl =~ m#^/# ) {
+        if ( open FO, ">>", $chl ) {
+            print FO "D $action\n";
+            close FO;
+        } else {
+            Log "Failed to write to $chl: $!";
+        }
+        return;
+    }
 
     if ( &config("haiku_report") ) {
         ( $stats{haiku_debug}{$chl}{count}, $stats{haiku_debug}{$chl}{line} ) =
@@ -3000,7 +3088,6 @@ sub lookup {
             addressed => $params{addressed} || 0,
             editable  => $params{editable} || 0,
             op        => $params{op} || 0,
-            idle      => $params{idle} || 0,
             type      => $params{type} || "irc_public",
         },
         EVENT => 'db_success'
@@ -3124,11 +3211,14 @@ sub expand {
                     last unless $msg =~ s/\Q$1/$cased/g;
                 }
                 $stats{last_vars}{$chl}{$gvar} = $g_v;
+            } else {
+                Log "Can't find gvar for $gvar->$gender!";
             }
         }
     }
 
     my $oldmsg = "";
+    $stats{last_vars}{$chl} = {};
     while ( $oldmsg ne $msg and $msg =~ /\$([a-zA-Z_]\w+)|\${([a-zA-Z_]\w+)}/ )
     {
         $oldmsg = $msg;
@@ -3180,8 +3270,10 @@ sub expand {
             last;
         }
 
-        $stats{last_vars}{$chl}{$full} = [];
-        while ( $msg =~ /((\ban? )?\$(?:$full|{$full})\b)/i ) {
+        $stats{last_vars}{$chl}{$full} = []
+          unless exists $stats{last_vars}{$chl}{$full};
+        Log "full = $full, msg = $msg";
+        while ( $msg =~ /((\ban? )?\$(?:$full|{$full})(?:\b|$))/i ) {
             my $replacement = &get_var( $record, $var, $conjugate );
             $replacement = &set_case( $var, $replacement );
             $replacement = A($replacement) if $2;
@@ -3210,7 +3302,7 @@ sub expand {
             Log "Replacing $1 with $replacement";
             last if $replacement =~ /\$/;
 
-            $msg =~ s/(?:\ban? )?\$(?:$full|{$full})\b/$replacement/i;
+            $msg =~ s/(?:\ban? )?\$(?:$full|{$full})(?:\b|$)/$replacement/i;
             push @{ $stats{last_vars}{$chl}{$full} }, $replacement;
         }
 
