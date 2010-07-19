@@ -183,8 +183,7 @@ unless ($ENV{'SKIP_INIT'})
     ($irc) = POE::Component::IRC::State->spawn();
     if (my $pass = &config("password"))
     {
-        $irc->plugin_add( 'NickServID',
-            POE::Component::IRC::Plugin::NickServID->new( Password => $pass ) );
+        $irc->plugin_add( 'NickServID', POE::Component::IRC::Plugin::NickServID->new( Password => $pass ) );
     }
 
     POE::Component::SimpleDBI->new('db') or die "Can't create DBI session";
@@ -207,13 +206,14 @@ unless ($ENV{'SKIP_INIT'})
             irc_chan_sync    => \&irc_on_chan_sync,
             irc_socketerr    => \&irc_on_socketerr,
             irc_invite       => \&irc_on_invite,
+            irc_473          => \&irc_on_inviteonlychan,
             db_success       => \&db_success,
             delayed_post     => \&delayed_post,
-	    heartbeat        => \&heartbeat,
-    #        _default           => sub { 
-    #             my ($event, $args) = @_[ARG0 .. $#_];
-    #             print STDERR Data::Dumper::Dumper($event, $args);
-    #        },
+            heartbeat        => \&heartbeat,
+            #_default           => sub { 
+            #     my ($event, $args) = @_[ARG0 .. $#_];
+            #     print STDERR Data::Dumper::Dumper($event, $args);
+            #},
         },
     );
 
@@ -2545,6 +2545,11 @@ sub irc_on_chan_sync {
 
 sub irc_on_connect {
     Log("Connected...");
+    Log("Identifying...");
+    if (my $pass = &config("password"))
+    {
+        &say( nickserv => "identify $pass" );
+    }
     Log("Done.");
 }
 
@@ -2570,6 +2575,16 @@ sub irc_on_invite {
         $irc->yield( join => $channel );
     }
 }
+sub irc_on_inviteonlychan
+{
+    my ($who, $channel) = @_[ARG0 .. $#_];
+    if ($stats{identified})
+    {
+        # nickserv is enabled
+        &say( chanserv => "invite $channel" );
+    }
+}
+
 
 sub save {
     DumpFile( $configfile, $config );
@@ -3075,7 +3090,7 @@ sub lookup {
     POE::Kernel->post(
         db  => 'SINGLE',
         SQL => "select id, fact, verb, tidbit from bucket_facts 
-			where $sql order by rand("
+            where $sql order by rand("
           . int( rand(1e6) ) 
           . ') limit 1',
         PLACEHOLDERS => \@placeholders,
@@ -3619,3 +3634,4 @@ sub seven {
     }
     return 1;
 }
+ 
