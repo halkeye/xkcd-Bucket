@@ -216,8 +216,6 @@ unless ($ENV{'SKIP_INIT'})
     #        },
         },
     );
-    $irc->plugin_add( 'NickServID',
-	    POE::Component::IRC::Plugin::NickServID->new( Password => $pass ) );
 
     POE::Kernel->run;
     print "POE::Kernel has left the building.\n";
