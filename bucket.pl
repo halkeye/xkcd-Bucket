@@ -101,6 +101,7 @@ my %config_keys = (
     random_item_cache_size => [ i => 20 ],
     random_wait            => [ i => 3 ],
     repeated_queries       => [ i => 5 ],
+    uses_reply             => [ i => 5 ],
     user_activity_timeout  => [ i => 360 ],
     user_mode              => [ s => "+B" ],
     value_cache_limit      => [ i => 1000 ],
@@ -988,7 +989,7 @@ sub irc_on_public {
         Log "Restarting at ${who}'s request";
         &say( $chl => "Okay, $who, I'll be right back." );
         $irc->yield( quit => "OHSHI--" );
-    } elsif ( $operator and $addressed and $msg =~ /^set(?: (\w+) (.*))?/ ) {
+    } elsif ( $operator and $addressed and $msg =~ /^set(?: (\w+) (.*)|$)/ ) {
         my ( $key, $val ) = ( $1, $2 );
 
         unless ( $key and exists $config_keys{$key} ) {
@@ -1025,7 +1026,7 @@ sub irc_on_public {
 
         &save;
         return;
-    } elsif ( $operator and $addressed and $msg =~ /^get (\w+)/ ) {
+    } elsif ( $operator and $addressed and $msg =~ /^get (\w+)\s*$/ ) {
         my ($key) = ($1);
         unless ( exists $config_keys{$key} ) {
             my @keys = sort keys %config_keys;
@@ -1294,7 +1295,7 @@ sub irc_on_public {
         &save;
     } elsif ( $addressed
         and ref $history{$chl}
-        and $msg =~ /^remember (\S+) ([^<>]+)$/ )
+        and $msg =~ /^remember (\S+) ([^<>]+)$/i )
     {
         my ( $target, $re ) = ( $1, $2 );
         if ( exists $config->{protected_quotes}
@@ -1418,6 +1419,10 @@ sub irc_on_public {
             &load_gender($1);
             &say( $chl => "$who: I don't know how to refer to $1!" );
         }
+    } elsif ( $msg =~ /^uses(?: \S+){1,5}$/i 
+              and &config("uses_reply") 
+              and rand(100) < &config("uses_reply") ) {
+        &cached_reply( $chl, $who, undef, "uses reply" );
     } else {
         my $orig = $msg;
         $msg = &trim($msg);
@@ -2442,14 +2447,11 @@ sub irc_start {
         EVENT   => 'db_success'
     );
 
-    &cache( $_[KERNEL], "Don't know" );
-    &cache( $_[KERNEL], "takes item" );
-    &cache( $_[KERNEL], "drops item" );
-    &cache( $_[KERNEL], "pickup full" );
-    &cache( $_[KERNEL], "list items" );
-    &cache( $_[KERNEL], "duplicate item" );
-    &cache( $_[KERNEL], "band name reply" );
-    &cache( $_[KERNEL], "haiku detected" );
+    foreach my $reply ("Don't know", "takes item", "drops item", "pickup full",
+                       "list items", "duplicate item", "band name reply",
+                       "haiku detected", "uses reply") {
+      &cache( $_[KERNEL], $reply );
+    }
     &random_item_cache( $_[KERNEL] );
     $stats{preloaded_items} = &config("inventory_preload");
 
@@ -2774,6 +2776,10 @@ sub heartbeat {
         FAF => [
             "http://twitter.com/statuses/user_timeline/14062390.rss",
             qr/^fakeanimalfacts: |http:.*/, "link"
+        ],
+        Batman => [
+            "http://twitter.com/statuses/user_timeline/126881128.rss",
+            qr/^God_Damn_Batman: |http:.*/, "link"
         ],
         factoid => 1
     );
@@ -3445,6 +3451,20 @@ sub count_syllables {
     $line =~ s/\.(com|org|net|info|biz|us)/ dot $1/g;
     $line =~ s/www\./double you double you double you dot /g;
     $line =~ s/[:,\/\*.!?]/ /g;
+
+    # break up at&t to a t & t.  find&replace => find & replace.
+    while ($line =~ /(?:\b|^)(\w+)&(\w+)(?:\b|$)/) {
+      my ($first, $last) = ($1, $2);
+      if (length($first) + length($last) < 6) {
+        my ($newfirst, $newlast) = ($first, $last);
+        $newfirst = join " ", split //, $newfirst;
+        $newlast  = join " ", split //, $newlast;
+        $line =~ s/(?:^|\b)$first&$last(?:\b|$)/$newfirst and $newlast/g;
+      } else {
+        $line =~ s/(?:^|\b)$first&$last(?:\b|$)/$first and $last/g;
+      }
+    }
+    $line =~ s/&/ and /g;
 
     # Remove hyphens except when dealing with numbers
     $line =~ s/-(\D|$)/ $1/g;
