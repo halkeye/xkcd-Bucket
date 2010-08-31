@@ -3382,29 +3382,13 @@ sub get_var {
 sub read_rss {
     my ( $url, $re, $tag ) = @_;
 
+    my $xml = undef;
     eval {
       $LWP::Simple::ua->timeout(10);
       my $rss = LWP::Simple::get($url);
       if ($rss) {
           Log "Retrieved RSS";
-          my $xml = XML::Simple::XMLin($rss);
-          if (!$xml) {
-              Report "No XML available for $url";
-              return ();
-          }
-          for ( 1 .. 5 ) {
-              if ( my $story = $xml->{channel}{item}[ rand(40) ] ) {
-                  $story->{description} =
-                    HTML::Entities::decode_entities( $story->{description} );
-                  $story->{description} =~ s/$re//isg if $re;
-                  Log Data::Dumper::Dumper($story, $url);
-                  next if $url =~ /twitter/ and $story->{description} =~ /^@/;
-                  next if length $story->{description} > 400;
-                  next if $story->{description} =~ /\[\.\.\.\]/;
-
-                  return ( $story->{description}, $story->{$tag} );
-              }
-          }
+          $xml = XML::Simple::XMLin($rss);
       }
     };
 
@@ -3412,6 +3396,25 @@ sub read_rss {
         Report "Failed when trying to read RSS from $url: $@";
         return ();
     }
+
+    if (!$xml) {
+        Report "No XML available for $url";
+        return ();
+    }
+    for ( 1 .. 5 ) {
+        if ( my $story = $xml->{channel}{item}[ rand(40) ] ) {
+            $story->{description} =
+                HTML::Entities::decode_entities( $story->{description} );
+            $story->{description} =~ s/$re//isg if $re;
+            next if $url =~ /twitter/ and $story->{description} =~ /^@/;
+            next if length $story->{description} > 400;
+            next if $story->{description} =~ /\[\.\.\.\]/;
+
+            return ( $story->{description}, $story->{$tag} );
+        }
+    }
+    Report "No data available for $url";
+    return ();
 }
 
 sub config {
