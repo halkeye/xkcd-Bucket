@@ -101,6 +101,9 @@ my %config_keys = (
     random_item_cache_size => [ i => 20 ],
     random_wait            => [ i => 3 ],
     repeated_queries       => [ i => 5 ],
+    squirrel_chance        => [ i => 20 ],
+    squirrel_shock         => [ i => 60 ],
+    timeout                => [ i => 60 ],
     uses_reply             => [ i => 5 ],
     user_activity_timeout  => [ i => 360 ],
     user_mode              => [ s => "+B" ],
@@ -507,6 +510,7 @@ sub irc_on_public {
         my ( $page, $fact ) = ( $1 || 1, $2 );
         $stats{literal}++;
         $fact = &trim($fact);
+        $fact = &decommify($fact);
         Log "Literal[$page] $fact";
         $_[KERNEL]->post(
             db  => 'MULTIPLE',
@@ -1081,22 +1085,28 @@ sub irc_on_public {
             or ref $replacables{$var}{vals} eq 'ARRAY'
             and @{ $replacables{$var}{vals} } > 30 )
         {
-            $_[KERNEL]->post(
-                db  => 'MULTIPLE',
-                SQL => 'select value 
-                      from bucket_vars vars 
-                           left join bucket_values vals 
-                           on vars.id = vals.var_id  
-                      where name = ?
-                      order by value',
-                PLACEHOLDERS => [$var],
-                BAGGAGE      => {
-                    %bag,
-                    cmd  => "dump_var",
-                    name => $var,
-                },
-                EVENT => 'db_success'
-            );
+            if ( &config("www_root") ) {
+                $_[KERNEL]->post(
+                    db  => 'MULTIPLE',
+                    SQL => 'select value 
+                        from bucket_vars vars 
+                             left join bucket_values vals 
+                             on vars.id = vals.var_id  
+                        where name = ?
+                        order by value',
+                    PLACEHOLDERS => [$var],
+                    BAGGAGE      => {
+                        %bag,
+                        cmd  => "dump_var",
+                        name => $var,
+                    },
+                    EVENT => 'db_success'
+                );
+            } else {
+                &say( $chl =>
+                        "Sorry, $who, I can't print $replacables{$var}{vals}"
+                      . "values to the channel." );
+            }
             return;
         }
 
@@ -1334,6 +1344,7 @@ sub irc_on_public {
         } else {
             $quote = "<$match->[0]> $match->[2]";
         }
+        $quote =~ s/\$/\\\$/g;
         Log "Remembering '$match->[0] quotes' '<reply>' '$quote'";
         $_[KERNEL]->post(
             db  => 'SINGLE',
@@ -1419,9 +1430,10 @@ sub irc_on_public {
             &load_gender($1);
             &say( $chl => "$who: I don't know how to refer to $1!" );
         }
-    } elsif ( $msg =~ /^uses(?: \S+){1,5}$/i 
-              and &config("uses_reply") 
-              and rand(100) < &config("uses_reply") ) {
+    } elsif ( $msg =~ /^uses(?: \S+){1,5}$/i
+        and &config("uses_reply")
+        and rand(100) < &config("uses_reply") )
+    {
         &cached_reply( $chl, $who, undef, "uses reply" );
     } else {
         my $orig = $msg;
@@ -1646,6 +1658,7 @@ sub db_success {
                 return;
             }
 
+            $fact = &decommify($fact);
             Log "Learning '$fact' '$verb' '$tidbit'";
             $_[KERNEL]->post(
                 db  => 'SINGLE',
@@ -1686,6 +1699,7 @@ sub db_success {
                 return;
             }
         } elsif ( $bag{addressed}
+            and $bag{orig} =~ m{[+\-*/]}
             and $bag{orig} =~ m{^([\s0-9a-fA-F_x+\-*/.()]+)$} )
         {
 
@@ -1693,7 +1707,15 @@ sub db_success {
             $stats{math}++;
             my $res;
             my $exp = $1;
-            if ($math) {
+
+         # if there's hex in here, but not prefixed with 0x, just throw an error
+            foreach my $num ( $exp =~ /([x0-9a-fA-F.]+)/g ) {
+                next if $num =~ /^0x|^[0-9.]+$|^[0-9.]+[eE][0-9]+$/;
+                &error( $bag{chl}, $bag{who} );
+                return;
+            }
+
+            if ( $exp !~ /\*\*/ and $math ) {
                 my $newexp;
                 foreach my $word ( split /( |-[\d_e.]+|\*\*|[+\/()*])/, $exp ) {
                     $word = "new $math(\"$word\")" if $word =~ /^[_0-9.e]+$/;
@@ -1727,7 +1749,23 @@ sub db_success {
         }
 
         #Log "extra work on $bag{msg}";
-        if ( $bag{orig} =~ /^say (.*)/i ) {
+        if (    $bag{orig} =~ /\bsquirrel\b/i
+            and &config("squirrel_shock")
+            and rand(100) < &config("squirrel_chance")
+            and $talking{ $bag{chl} } == -1 )
+        {
+            &say( $bag{chl} => "SQUIRREL!" );
+            &say( $bag{chl} => "O_O" );
+            POE::Kernel->delay_add(
+                delayed_post => &config("squirrel_shock") / 2 => $bag{chl} =>
+                  "    O_O" );
+            POE::Kernel->delay_add(
+                delayed_post => &config("squirrel_shock") => $bag{chl} =>
+                  "  O_O" );
+
+            # and shut up for the shock time
+            $talking{ $bag{chl} } = time + &config("squirrel_shock");
+        } elsif ( $bag{orig} =~ /^say (.*)/i ) {
             my $msg = $1;
             $stats{say}++;
             $msg =~ s/\W+$//;
@@ -1753,9 +1791,7 @@ sub db_success {
         } elsif (
             &config("max_sub_length")
             and length( $bag{orig} ) < &config("max_sub_length")
-            and
-
-            $bag{orig} !~ /extra|except/
+            and $bag{orig} !~ /extra|except/
             and rand(100) < &config("ex_to_sex")
             and (  $bag{orig} =~ s/\ban ex/a sex/
                 or $bag{orig} =~ s/\bex/sex/ )
@@ -1770,15 +1806,15 @@ sub db_success {
         } elsif (
             $bag{orig} !~ /\?\s*$/
             and $bag{orig} =~ /^(?:
-                               puts \s (.+) \s in \s (the \s)? $nick\b
-                             | (?:gives|hands) \s $nick \s (.+)
-                             | (?:gives|hands) \s (.+) \s to $nick\b
+                               puts \s (\S.+) \s in \s (the \s)? $nick\b
+                             | (?:gives|hands) \s $nick \s (\S.+)
+                             | (?:gives|hands) \s (\S.+) \s to $nick\b
                             )/ix
             or (
                     $bag{addressed}
                 and $bag{orig} =~ /^(?:
-                                 take \s this \s (.+)
-                               | have \s (an? \s .+)
+                                 take \s this \s (\S.+)
+                               | have \s (an? \s \S.+)
                               )/x
             )
           )
@@ -2323,6 +2359,25 @@ sub db_success {
             $bag{page} = "*";
         }
 
+        if ( $lines[0]->{verb} eq "<alias>" ) {
+            my $new_fact = $lines[0]->{tidbit};
+            $_[KERNEL]->post(
+                db  => 'MULTIPLE',
+                SQL => 'select id, verb, tidbit, mood, chance, protected
+					from bucket_facts where fact = ? order by id',
+                PLACEHOLDERS => [$new_fact],
+                BAGGAGE      => {
+                    %bag,
+                    cmd      => "literal",
+                    alias_to => $new_fact
+                },
+                EVENT => 'db_success'
+            );
+            Report "Asked for the 'literal' of an alias,"
+              . " being smart and redirecting to '$new_fact'";
+            return;
+        }
+
         if (    $bag{page} eq '*'
             and &config("www_url")
             and &config("www_root")
@@ -2337,6 +2392,9 @@ sub db_success {
                 )
               )
             {
+                if ( defined $bag{alias_to} ) {
+                    print DUMP "Alias to $bag{alias_to}\n";
+                }
                 my $count = @lines;
                 while ( my $fact = shift @lines ) {
                     if ( $bag{op} ) {
@@ -2360,8 +2418,10 @@ sub db_success {
         $bag{page} = 1 if $bag{page} eq '*';
 
         my $prefix = "$bag{fact}";
-        if ( $lines[0]->{protected} ) {
+        if ( $lines[0]->{protected} and not defined $bag{alias_to} ) {
             $prefix .= " (protected)";
+        } elsif ( defined $bag{alias_to} ) {
+            $prefix .= " (=> $bag{alias_to})";
         }
 
         my $answer;
@@ -2447,10 +2507,19 @@ sub irc_start {
         EVENT   => 'db_success'
     );
 
-    foreach my $reply ("Don't know", "takes item", "drops item", "pickup full",
-                       "list items", "duplicate item", "band name reply",
-                       "haiku detected", "uses reply") {
-      &cache( $_[KERNEL], $reply );
+    foreach my $reply (
+        "Don't know",
+        "takes item",
+        "drops item",
+        "pickup full",
+        "list items",
+        "duplicate item",
+        "band name reply",
+        "haiku detected",
+        "uses reply"
+      )
+    {
+        &cache( $_[KERNEL], $reply );
     }
     &random_item_cache( $_[KERNEL] );
     $stats{preloaded_items} = &config("inventory_preload");
@@ -2964,6 +3033,15 @@ sub commify {
     return $num;
 }
 
+sub decommify {
+    my $string = shift;
+
+    $string =~ s/\s*,\s*/ /g;
+    $string =~ s/\s\s+/ /g;
+
+    return $string;
+}
+
 sub round_time {
     my $dt    = shift;
     my $units = "second";
@@ -3070,11 +3148,12 @@ sub lookup {
     if ( exists $params{msg} ) {
         $sql          = "fact = ?";
         $type         = "single";
+        $params{msg}  = &decommify( $params{msg} );
         @placeholders = ( $params{msg} );
     } elsif ( exists $params{msgs} ) {
         $sql = "fact in (" . join( ", ", map { "?" } @{ $params{msgs} } ) . ")";
-        @placeholders = @{ $params{msgs} };
-        $type         = "multiple";
+        @placeholders = map { &decommify($_) } @{ $params{msgs} };
+        $type = "multiple";
     } else {
         $sql  = "1=1";
         $type = "none";
@@ -3130,9 +3209,9 @@ sub expand {
 
     my $gender = $stats{users}{genders}{ lc $who };
     my $target = $who;
-    while ( $msg =~ /(\$who\b|\${who})/i ) {
+    while ( $msg =~ /(?<!\\)(\$who\b|\${who})/i ) {
         my $cased = &set_case( $1, $who );
-        last unless $msg =~ s/\$who\b|\${who}/$cased/i;
+        last unless $msg =~ s/(?<!\\)(?:\$who\b|\${who})/$cased/i;
         $stats{last_vars}{$chl}{who} = $who;
     }
     
@@ -3148,9 +3227,9 @@ sub expand {
         }
     }
 
-    if ( $msg =~ /\$someone\b|\${someone}/i ) {
+    if ( $msg =~ /(?<!\\)(?:\$someone\b|\${someone})/i ) {
         $stats{last_vars}{$chl}{someone} = [];
-        while ( $msg =~ /(\$someone\b|\${someone})/i ) {
+        while ( $msg =~ /(?<!\\)(\$someone\b|\${someone})/i ) {
             my $rnick = &someone( $chl, $who, defined $to ? $to : () );
             my $cased = &set_case( $1, $rnick );
             last unless $msg =~ s/\$someone\b|\${someone}/$cased/i;
@@ -3161,12 +3240,12 @@ sub expand {
         }
     }
 
-    while ( $msg =~ /(\$to\b|\${to})/i ) {
+    while ( $msg =~ /(?<!\\)(\$to\b|\${to})/i ) {
         unless ( defined $to ) {
             $to = &someone( $chl, $who );
         }
         my $cased = &set_case( $1, $to );
-        last unless $msg =~ s/\$to\b|\${to}/$cased/i;
+        last unless $msg =~ s/(?<!\\)(?:\$to\b|\${to})/$cased/i;
         push @{ $stats{last_vars}{$chl}{to} }, $to;
 
         $gender = $stats{users}{genders}{ lc $to };
@@ -3174,7 +3253,7 @@ sub expand {
     }
 
     $stats{last_vars}{$chl}{item} = [];
-    while ( $msg =~ /(\$(give)?item|\${(give)?item})/i ) {
+    while ( $msg =~ /(?<!\\)(\$(give)?item|\${(give)?item})/i ) {
         my $giveflag = $2 || $3 ? "give" : "";
         if (@inventory) {
             my $give  = $editable && $giveflag;
@@ -3183,9 +3262,11 @@ sub expand {
             push @{ $stats{last_vars}{$chl}{item} },
               $give ? "$item (given)" : $item;
             last
-              unless $msg =~ s/\$${giveflag}item|\${${giveflag}item}/$cased/i;
+              unless $msg =~
+                  s/(?<!\\)(?:\$${giveflag}item|\${${giveflag}item})/$cased/i;
         } else {
-            $msg =~ s/\$${giveflag}item|\${${giveflag}item}/bananas/i;
+            $msg =~
+              s/(?<!\\)(?:\$${giveflag}item|\${${giveflag}item})/bananas/i;
             push @{ $stats{last_vars}{$chl}{item} }, "(bananas)";
         }
     }
@@ -3193,7 +3274,7 @@ sub expand {
       unless @{ $stats{last_vars}{$chl}{item} };
 
     $stats{last_vars}{$chl}{newitem} = [];
-    while ( $msg =~ /(\$newitem|\${newitem})/i ) {
+    while ( $msg =~ /(?<!\\)(\$newitem|\${newitem})/i ) {
         if ($editable) {
             my $newitem = shift @random_items || 'bananas';
             my ( $rc, @dropped ) = &put_item( $newitem, 1 );
@@ -3204,10 +3285,10 @@ sub expand {
             }
 
             my $cased = &set_case( $1, $newitem );
-            last unless $msg =~ s/\$newitem|\${newitem}/$cased/i;
+            last unless $msg =~ s/(?<!\\)(?:\$newitem|\${newitem})/$cased/i;
             push @{ $stats{last_vars}{$chl}{newitem} }, $newitem;
         } else {
-            $msg =~ s/\$newitem|\${newitem}/bananas/ig;
+            $msg =~ s/(?<!\\)(?:\$newitem|\${newitem})/bananas/ig;
         }
     }
     delete $stats{last_vars}{$chl}{newitem}
@@ -3215,7 +3296,7 @@ sub expand {
 
     if ($gender) {
         foreach my $gvar ( keys %gender_vars ) {
-            next unless $msg =~ /\$$gvar\b|\${$gvar}/i;
+            next unless $msg =~ /(?<!\\)(?:\$$gvar\b|\${$gvar})/i;
 
             Log "Replacing gvar $gvar...";
             if ( exists $gender_vars{$gvar}{$gender} ) {
@@ -3225,7 +3306,7 @@ sub expand {
                     $g_v =~ s/%N/$target/;
                     Log " => $g_v";
                 }
-                while ( $msg =~ /(\$$gvar\b|\${$gvar})/i ) {
+                while ( $msg =~ /(?<!\\)(\$$gvar\b|\${$gvar})/i ) {
                     my $cased = &set_case( $1, $g_v );
                     last unless $msg =~ s/\Q$1/$cased/g;
                 }
@@ -3238,7 +3319,8 @@ sub expand {
 
     my $oldmsg = "";
     $stats{last_vars}{$chl} = {};
-    while ( $oldmsg ne $msg and $msg =~ /\$([a-zA-Z_]\w+)|\${([a-zA-Z_]\w+)}/ )
+    while ( $oldmsg ne $msg
+        and $msg =~ /(?<!\\)(?:\$([a-zA-Z_]\w+)|\${([a-zA-Z_]\w+)})/ )
     {
         $oldmsg = $msg;
         my $var = $1 || $2;
@@ -3292,7 +3374,7 @@ sub expand {
         $stats{last_vars}{$chl}{$full} = []
           unless exists $stats{last_vars}{$chl}{$full};
         Log "full = $full, msg = $msg";
-        while ( $msg =~ /((\ban? )?\$(?:$full|{$full})(?:\b|$))/i ) {
+        while ( $msg =~ /((\ban? )?(?<!\\)\$(?:$full|{$full})(?:\b|$))/i ) {
             my $replacement = &get_var( $record, $var, $conjugate );
             $replacement = &set_case( $var, $replacement );
             $replacement = A($replacement) if $2;
@@ -3321,7 +3403,8 @@ sub expand {
             Log "Replacing $1 with $replacement";
             last if $replacement =~ /\$/;
 
-            $msg =~ s/(?:\ban? )?\$(?:$full|{$full})(?:\b|$)/$replacement/i;
+            $msg =~
+              s/(?:\ban? )?(?<!\\)\$(?:$full|{$full})(?:\b|$)/$replacement/i;
             push @{ $stats{last_vars}{$chl}{$full} }, $replacement;
         }
 
@@ -3456,16 +3539,16 @@ sub count_syllables {
     $line =~ s/[:,\/\*.!?]/ /g;
 
     # break up at&t to a t & t.  find&replace => find & replace.
-    while ($line =~ /(?:\b|^)(\w+)&(\w+)(?:\b|$)/) {
-      my ($first, $last) = ($1, $2);
-      if (length($first) + length($last) < 6) {
-        my ($newfirst, $newlast) = ($first, $last);
-        $newfirst = join " ", split //, $newfirst;
-        $newlast  = join " ", split //, $newlast;
-        $line =~ s/(?:^|\b)$first&$last(?:\b|$)/$newfirst and $newlast/g;
-      } else {
-        $line =~ s/(?:^|\b)$first&$last(?:\b|$)/$first and $last/g;
-      }
+    while ( $line =~ /(?:\b|^)(\w+)&(\w+)(?:\b|$)/ ) {
+        my ( $first, $last ) = ( $1, $2 );
+        if ( length($first) + length($last) < 6 ) {
+            my ( $newfirst, $newlast ) = ( $first, $last );
+            $newfirst = join " ", split //, $newfirst;
+            $newlast  = join " ", split //, $newlast;
+            $line =~ s/(?:^|\b)$first&$last(?:\b|$)/$newfirst and $newlast/g;
+        } else {
+            $line =~ s/(?:^|\b)$first&$last(?:\b|$)/$first and $last/g;
+        }
     }
     $line =~ s/&/ and /g;
 
