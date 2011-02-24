@@ -1099,9 +1099,7 @@ sub irc_on_public {
                     EVENT => 'db_success'
                 );
             } else {
-                &say( $chl =>
-                        "Sorry, $who, I can't print $replacables{$var}{vals}"
-                      . "values to the channel." );
+                &say( $chl => "Sorry, $who, I can't print " . scalar @{$replacables{$var}{vals}} . "values to the channel." );
             }
             return;
         }
