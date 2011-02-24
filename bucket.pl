@@ -35,6 +35,7 @@ use URI::Escape;
 use LWP::Simple;
 use XML::Simple;
 
+use DBI;
 $Data::Dumper::Indent = 1;
 
 # try to load Math::BigFloat if possible
@@ -79,6 +80,7 @@ my @random_items;
 my %replacables;
 my %history;
 my $bucket_log_fh;
+my %handles;
 
 my %config_keys = (
     bananas_chance         => [ p => 0.02 ],
@@ -94,6 +96,7 @@ my %config_keys = (
     inventory_preload      => [ i => 0 ],
     inventory_size         => [ i => 20 ],
     item_drop_rate         => [ i => 3 ],
+    lookup_tla             => [ i => 10 ],
     max_sub_length         => [ i => 80 ],
     minimum_length         => [ i => 6 ],
     nickserv_msg           => [ s => "" ],
@@ -158,12 +161,7 @@ our %gender_vars = (
 );
 
 $stats{startup_time} = time;
-
-if ( &config("logfile") ) {
-    open( LOG, ">>",
-        DEBUG ? &config("logfile") . ".debug" : &config("logfile") )
-      or die "Can't write " . &config("logfile") . ": $!";
-}
+&open_log;
 
 # make sure the file_input file is empty, if it is defined
 # (so that we don't delete anything important by mistake)
@@ -628,7 +626,7 @@ sub irc_on_public {
             &say( $chl => "$who: $cmd what channel?" );
             return;
         }
-        $irc->yield( $cmd => $dst, $msg );
+        $irc->yield( $cmd => $msg ? ($dst, $msg) : $dst );
         &say( $chl => "$who: ${cmd}ing $dst" );
         Report "${cmd}ing $dst at ${who}'s request";
     } elsif ( $addressed and $operator and lc $msg eq 'list ignored' ) {
@@ -857,7 +855,6 @@ sub irc_on_public {
             },
             EVENT => 'db_success'
         );
-
     } elsif ( $addressed and $msg =~ /^how many syllables in (.*)/i ) {
         my ( $count, $debug ) = &count_syllables($1);
         &say(
@@ -875,7 +872,6 @@ sub irc_on_public {
 
         &say(   $chl => "$who, that was '$line', with $count syllable"
               . &s($count) );
-
     } elsif ( $addressed and $msg =~ /^what was that\??$/i ) {
         my $id = $stats{last_fact}{$chl};
         unless ($id) {
@@ -1364,7 +1360,6 @@ sub irc_on_public {
             },
             EVENT => 'db_success'
         );
-
     } elsif (
         $addressed
         and $msg =~ /^(?:(I|[-\w]+) \s (?:am|is)|
@@ -1435,6 +1430,24 @@ sub irc_on_public {
         and rand(100) < &config("uses_reply") )
     {
         &cached_reply( $chl, $who, undef, "uses reply" );
+    } elsif ( &config("lookup_tla") > 0
+        and rand(100) < &config("lookup_tla")
+        and $msg =~ /^([A-Z])([A-Z])([A-Z])\??$/ )
+    {
+        my $pattern = "$1% $2% $3%";
+        $_[KERNEL]->post(
+            db  => 'SINGLE',
+            SQL => 'select value
+               from bucket_values 
+               left join bucket_vars 
+                    on var_id = bucket_vars.id
+               where name = ?  and value like ?
+               order by rand()
+               limit 1',
+            PLACEHOLDERS => [ &config("band_var"), $pattern ],
+            BAGGAGE => { %bag, cmd => "tla", tla => $msg },
+            EVENT   => 'db_success'
+        );
     } else {
         my $orig = $msg;
         $msg = &trim($msg);
@@ -1754,6 +1767,7 @@ sub db_success {
             and rand(100) < &config("squirrel_chance")
             and $talking{ $bag{chl} } == -1 )
         {
+            $stats{squirrels}++;
             &say( $bag{chl} => "SQUIRREL!" );
             &say( $bag{chl} => "O_O" );
             POE::Kernel->delay_add(
@@ -2004,34 +2018,7 @@ sub db_success {
     } elsif ( $bag{cmd} eq 'band_name' ) {
         my %line = ref $res->{RESULT} ? %{ $res->{RESULT} } : ();
         unless ( $line{value} ) {
-            my @words = sort { length $b <=> length $a } @{ $bag{words} };
-            $_[KERNEL]->post(
-                db  => 'SINGLE',
-                SQL => 'select id from `mainlog` where 
-                            instr( msg, ? ) >0 and 
-                            instr( msg, ? ) >0 and 
-                            instr( msg, ? ) >0
-                            limit 1',
-                PLACEHOLDERS => \@words,
-                BAGGAGE      => { %bag, cmd => "band_name2", },
-                EVENT        => 'db_success'
-            );
-        }
-    } elsif ( $bag{cmd} eq 'band_name2' ) {
-        my %line = ref $res->{RESULT} ? %{ $res->{RESULT} } : ();
-        unless ( $line{id} ) {
-            &sql(
-                'insert into bucket_values (var_id, value) 
-                 values ( (select id from bucket_vars where name = ? limit 1), ?);',
-                [ &config("band_var"), $bag{stripped_name} ],
-                { %bag, cmd => "new band name" }
-            );
-
-            $bag{name} =~ s/(^| )(\w)/$1\u$2/g;
-            Report
-              "Learned a new band name from $bag{who} in $bag{chl}: $bag{name}";
-            &cached_reply( $bag{chl}, $bag{who}, $bag{name},
-                "band name reply" );
+            &check_band_name( \%bag );
         }
     } elsif ( $bag{cmd} eq 'edit' ) {
         my @lines = ref $res->{RESULT} ? @{ $res->{RESULT} } : [];
@@ -2478,6 +2465,17 @@ sub db_success {
             delete $stats{preloaded_items};
             &random_item_cache( $_[KERNEL] );
         }
+    } elsif ( $bag{cmd} eq 'tla' ) {
+        if ( $res->{RESULT}{value} ) {
+            $stats{lookup_tla}++;
+            $bag{tla} =~ s/\W//g;
+            $stats{last_fact}{ $bag{chl} } = "a possible meaning of $bag{tla}.";
+            &say(
+                $bag{chl} => "$bag{who}: " . join " ",
+                map { ucfirst }
+                  split ' ', $res->{RESULT}{value}
+            );
+        }
     }
 }
 
@@ -2558,7 +2556,7 @@ sub irc_on_notice {
         and $msg =~ (
               &config("nickserv_msg")
             ? &config("nickserv_msg")
-            : qr/Password accepted|(?:isn't|not) registered/
+            : qr/Password accepted|(?:isn't|not) registered|You are now identified/
         )
       )
     {
@@ -2763,6 +2761,12 @@ sub get_stats {
     );
 
     $stats{last_updated} = time;
+
+    # check if the log file was moved, if so, reopen it
+    if (&config("logfile") and not -f &config("logfile")) {
+        &open_log;
+        Log "Reopened log file";
+    }
 }
 
 sub tail {
@@ -3500,6 +3504,143 @@ sub read_rss {
     return ();
 }
 
+sub get_band_name_handles {
+    if ( exists $handles{dbh} ) {
+        return \%handles;
+    }
+
+    Log "Creating band name database/query handles";
+    unless ( $handles{dbh} ) {
+        $handles{dbh} =
+          DBI->connect( &config("db_dsn"), &config("db_username"),
+            &config("db_password") )
+          or Report "Failed to create dbh!" and return undef;
+    }
+
+    $handles{lookup} = $handles{dbh}->prepare(
+        "select id, word, `lines` 
+                                  from word2id 
+                                  where word in (?, ?, ?) 
+                                  order by `lines`"
+    );
+
+    return \%handles;
+}
+
+sub check_band_name {
+    my $bag = shift;
+
+    my $handles = &get_band_name_handles();
+    return unless $handles;
+
+    return unless ref $bag->{words} eq 'ARRAY' and @{ $bag->{words} } == 3;
+    $bag->{start} = time;
+    my @trimmed_words = map { s/[^0-9a-zA-Z'\-]//g; lc $_ } @{ $bag->{words} };
+    if (   $trimmed_words[0] eq $trimmed_words[1]
+        or $trimmed_words[0] eq $trimmed_words[2]
+        or $trimmed_words[1] eq $trimmed_words[2] )
+    {
+        return;
+    }
+
+    Log "Executing band name word count (@trimmed_words)";
+    $handles->{lookup}->execute(@trimmed_words);
+    my @words;
+    my $delayed;
+    my $found = 0;
+    while ( my $line = $handles->{lookup}->fetchrow_hashref ) {
+        my $entry = {
+            word  => $line->{word},
+            id    => $line->{id},
+            count => $line->{lines},
+            start => time
+        };
+
+        if ( @words < 2 ) {
+            Log "processing $entry->{word} ($entry->{count})\n";
+            $entry->{sth} = $handles->{dbh}->prepare(
+                "select line 
+                                                      from word2line 
+                                                      where word = ? 
+                                                      order by line"
+            );
+            $entry->{sth}->execute( $entry->{id} );
+            $entry->{cur} = $entry->{sth}->fetchrow_hashref;
+            unless ( $entry->{cur} ) {
+                Log "Not all words found, new band declared";
+                $bag->{elapsed} = time - $bag->{start};
+                &add_new_band($bag);
+                return;
+            }
+            $entry->{next_id} = $entry->{cur}{line};
+            $entry->{elapsed} = time - $entry->{start};
+            push @words, $entry;
+        } else {
+            Log "delaying processing $entry->{word} ($entry->{count})\n";
+            $delayed = $entry;
+        }
+    }
+
+    @words = sort { $a->{next_id} <=> $b->{next_id} } @words;
+
+    my @union;
+    Log "Finding union";
+    while (1) {
+        if ( $words[0]->{next_id} == $words[1]->{next_id} ) {
+            push @union, $words[0]->{next_id};
+        }
+
+        unless ( $words[0]->{next_id} < $words[1]->{next_id} ) {
+            ( $words[1], $words[0] ) = ( $words[0], $words[1] );
+        }
+
+        unless ( $words[0]->{cur} = $words[0]->{sth}->fetchrow_hashref ) {
+            last;
+        }
+        $words[0]->{next_id} = $words[0]->{cur}{line};
+    }
+
+    if ( @union > 0 ) {
+        Log "Union ids: " . @union;
+        my $sth = $handles->{dbh}->prepare(
+            "select line 
+                                            from word2line 
+                                            where word = ? 
+                                              and line in (?"
+              . ( ",?" x ( @union - 1 ) ) . ") 
+                                            limit 1"
+        );
+
+        my $res = $sth->execute( $delayed->{id}, @union );
+        $found = $res > 0;
+    } else {
+        $found = 1;
+    }
+
+    Log "Found = $found";
+    unless ($found) {
+        $bag->{elapsed} = time - $bag->{start};
+        &add_new_band($bag);
+        return;
+    }
+}
+
+sub add_new_band {
+    my $bag = shift;
+    &sql(
+        'insert into bucket_values (var_id, value) 
+         values ( (select id from bucket_vars where name = ? limit 1), ?);',
+        [ &config("band_var"), $bag->{stripped_name} ],
+        { %$bag, cmd => "new band name" }
+    );
+
+    $bag->{name} =~ s/(^| )(\w)/$1\u$2/g;
+    Report "Learned a new band name from $bag->{who} in $bag->{chl} ("
+      . join( " ", &round_time( $bag->{elapsed} ) )
+      . "): $bag->{name}";
+    &cached_reply( $bag->{chl}, $bag->{who}, $bag->{name}, "band name reply" );
+}
+
 sub config {
     my $key = shift;
 
@@ -3638,7 +3779,7 @@ sub syllables {
     $modsyl++ if ( $word =~ /e[^aeioun]eo/ );
     $modsyl-- if ( $word =~ /e[^aeiou]eo([^s]$|u)/ );
     $modsyl++ if ( $word =~ /[^aeiou]i[rl]e$/ );
-    $modsyl-- if ( $word =~ /[^cs]es$/ );
+    $modsyl-- if ( $word =~ /[^cszaeiou]es$/ );
     $modsyl++ if ( $word =~ /[cs]hes$/ );
     $modsyl++ if ( $word =~ /[^aeiou][aeiouy]ing/ );
     $modsyl-- if ( $word =~ /[aeiou][^aeiou][e]ing/ );
@@ -3740,4 +3881,11 @@ sub seven {
     }
     return 1;
 }
- 
+
+sub open_log {
+    if ( &config("logfile") ) {
+        open( LOG, ">>",
+            DEBUG ? &config("logfile") . ".debug" : &config("logfile") )
+          or die "Can't write " . &config("logfile") . ": $!";
+    }
+}
