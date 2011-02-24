@@ -111,7 +111,6 @@ CREATE TABLE IF NOT EXISTS `genders` (
 -- Table structure for table `word2id`
 --
 
-DROP TABLE IF EXISTS `word2id`;
 CREATE TABLE IF NOT EXISTS `word2id` (
   `id` int(10) unsigned NOT NULL auto_increment,
   `word` varchar(32) NOT NULL,
@@ -124,7 +123,6 @@ CREATE TABLE IF NOT EXISTS `word2id` (
 -- Table structure for table `word2line`
 --
 
-DROP TABLE IF EXISTS `word2line`;
 CREATE TABLE IF NOT EXISTS `word2line` (
   `word` int(10) unsigned NOT NULL,
   `line` int(10) unsigned NOT NULL,
