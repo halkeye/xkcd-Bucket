@@ -3,11 +3,15 @@
 use strict;
 use DBI;
 use Time::HiRes qw/sleep/;
+use YAML qw/LoadFile DumpFile/;
 $|++;
+
+my $configfile = shift || "bucket.yml";
+my $config     = LoadFile($configfile);
 
 my $rebuild = shift;
 my $sleep = shift || 0.005;
-my $db = DBI->connect("DBI:mysql:database=dbname", "username", "password") or die "no DB";
+my $db = DBI->connect($config->{"db_dsn"},  $config->{"db_username"},$config->{"db_password"}) or die "no DB";
 
 my $add      = $db->prepare("insert into mainlog (stamp, msg) values (?, ?)") or die "Can't prepare add: $!";
 my $findword = $db->prepare("select id from word2id where word=?") or die "Can't prepare findword: $!";
@@ -23,7 +27,7 @@ my %words;
 
 $newest->execute;
 $max = $newest->fetchrow_hashref;
-$max = $max->{m};
+$max = $max->{m} || -1;
 print "max timestamp: $max\n";
 
 my %months = qw/Jan 1 Feb 2 Mar 3 Apr 4  May 5  Jun 6
