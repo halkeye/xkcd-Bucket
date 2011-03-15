@@ -427,6 +427,7 @@ sub irc_on_public {
     $editable = 1
       if ( $type ne 'irc_msg' and $chl ne '#bots' )
       or ( $type eq 'irc_msg' and $operator );
+
     Log("$type($chl): $who(o=$operator, a=$addressed, e=$editable): $msg");
     $bag{editable} = $editable;
 
@@ -902,7 +903,7 @@ sub irc_on_public {
         my ( $awake, $units ) = &round_time( time - $stats{startup_time} );
         my ( $mod, $modu ) = &round_time( time - ( stat($0) )[9] );
 
-        my $reply;
+        my $reply = "";;
         $reply = sprintf "I've been awake since %s (about %d %s), ",
           scalar localtime( $stats{startup_time} ),
           $awake, $units;
@@ -956,7 +957,7 @@ sub irc_on_public {
           &commify( $stats{items} ), &s( $stats{items} ), scalar @inventory;
         if ( $talking{$chl} == 0 ) {
             $reply .= "I'm being quiet right now. ";
-        } elsif ( $talking{$chl} > 0 ) {
+        } elsif ( defined $talking{$chl} && $talking{$chl} > 0 ) {
             $reply .= sprintf "I'm being quiet right now, "
               . "but I'll be back in about %s %s. ",
               &round_time( $talking{$chl} - time );
