@@ -179,49 +179,45 @@ foreach my $type ( keys %gender_vars ) {
     }
 }
 
-my $irc;
-unless ($ENV{'SKIP_INIT'})
+my ($irc) = POE::Component::IRC::State->spawn();
+if (my $pass = &config("password"))
 {
-    ($irc) = POE::Component::IRC::State->spawn();
-    if (my $pass = &config("password"))
-    {
-        $irc->plugin_add( 'NickServID', POE::Component::IRC::Plugin::NickServID->new( Password => $pass ) );
-    }
-
-    POE::Component::SimpleDBI->new('db') or die "Can't create DBI session";
-
-    POE::Session->create(
-        inline_states => {
-            _start           => \&irc_start,
-            irc_001          => \&irc_on_connect,
-            irc_kick         => \&irc_on_kick,
-            irc_public       => \&irc_on_public,
-            irc_ctcp_action  => \&irc_on_public,
-            irc_msg          => \&irc_on_public,
-            irc_notice       => \&irc_on_notice,
-            irc_disconnected => \&irc_on_disconnect,
-            irc_topic        => \&irc_on_topic,
-            irc_join         => \&irc_on_join,
-            irc_332          => \&irc_on_jointopic,
-            irc_331          => \&irc_on_jointopic,
-            irc_nick         => \&irc_on_nick,
-            irc_chan_sync    => \&irc_on_chan_sync,
-            irc_socketerr    => \&irc_on_socketerr,
-            irc_invite       => \&irc_on_invite,
-            irc_473          => \&irc_on_inviteonlychan,
-            db_success       => \&db_success,
-            delayed_post     => \&delayed_post,
-            heartbeat        => \&heartbeat,
-            #_default           => sub { 
-            #     my ($event, $args) = @_[ARG0 .. $#_];
-            #     print STDERR Data::Dumper::Dumper($event, $args);
-            #},
-        },
-    );
-
-    POE::Kernel->run;
-    print "POE::Kernel has left the building.\n";
+    $irc->plugin_add( 'NickServID', POE::Component::IRC::Plugin::NickServID->new( Password => $pass ) );
 }
+
+POE::Component::SimpleDBI->new('db') or die "Can't create DBI session";
+
+POE::Session->create(
+    inline_states => {
+        _start           => \&irc_start,
+        irc_001          => \&irc_on_connect,
+        irc_kick         => \&irc_on_kick,
+        irc_public       => \&irc_on_public,
+        irc_ctcp_action  => \&irc_on_public,
+        irc_msg          => \&irc_on_public,
+        irc_notice       => \&irc_on_notice,
+        irc_disconnected => \&irc_on_disconnect,
+        irc_topic        => \&irc_on_topic,
+        irc_join         => \&irc_on_join,
+        irc_332          => \&irc_on_jointopic,
+        irc_331          => \&irc_on_jointopic,
+        irc_nick         => \&irc_on_nick,
+        irc_chan_sync    => \&irc_on_chan_sync,
+        irc_socketerr    => \&irc_on_socketerr,
+        irc_invite       => \&irc_on_invite,
+        irc_473          => \&irc_on_inviteonlychan,
+        db_success       => \&db_success,
+        delayed_post     => \&delayed_post,
+        heartbeat        => \&heartbeat,
+        #_default           => sub { 
+        #     my ($event, $args) = @_[ARG0 .. $#_];
+        #     print STDERR Data::Dumper::Dumper($event, $args);
+        #},
+    },
+);
+
+POE::Kernel->run;
+print "POE::Kernel has left the building.\n";
 
 sub Log {
     print scalar localtime, " - @_\n";
