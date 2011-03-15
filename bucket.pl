@@ -2127,7 +2127,7 @@ sub db_success {
         $undo{ $bag{chl} } = [ 'insert', $bag{who}, \%line ];
         Report "$bag{who} called forget to delete "
           . "'$line{fact}', '$line{verb}', '$line{tidbit}'";
-        Log "forgetting $bag{fact}";
+        Log "forgetting $line{fact}";
         &sql( 'delete from bucket_facts where id=?', [ $line{id} ], );
         &say(
             $bag{chl} => "Okay, $bag{who}, forgot that",
