@@ -1,5 +1,5 @@
 #!/usr/bin/perl -w
-#  Copyright (C) 2010  Dan Boger - zigdon+bot@gmail.com
+#  Copyright (C) 2011  Dan Boger - zigdon+bot@gmail.com
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -86,37 +86,38 @@ my $bucket_log_fh;
 my %handles;
 
 my %config_keys = (
-    bananas_chance         => [ p => 0.02 ],
-    band_name              => [ p => 5 ],
-    band_var               => [ s => 'band' ],
-    ex_to_sex              => [ p => 1 ],
-    file_input             => [ f => "" ],
-    haiku_report           => [ i => 1 ],
-    hide_hostmask          => [ b => 0 ],
-    history_size           => [ i => 30 ],
-    idle_source            => [ s => 'factoid' ],
-    increase_mute          => [ i => 60 ],
-    inventory_preload      => [ i => 0 ],
-    inventory_size         => [ i => 20 ],
-    item_drop_rate         => [ i => 3 ],
-    lookup_tla             => [ i => 10 ],
-    max_sub_length         => [ i => 80 ],
-    minimum_length         => [ i => 6 ],
-    nickserv_msg           => [ s => "" ],
-    nickserv_nick          => [ s => "NickServ" ],
-    random_item_cache_size => [ i => 20 ],
-    random_wait            => [ i => 3 ],
-    repeated_queries       => [ i => 5 ],
-    squirrel_chance        => [ i => 20 ],
-    squirrel_shock         => [ i => 60 ],
-    timeout                => [ i => 60 ],
-    uses_reply             => [ i => 5 ],
-    user_activity_timeout  => [ i => 360 ],
-    user_mode              => [ s => "+B" ],
-    value_cache_limit      => [ i => 1000 ],
-    www_root               => [ s => "" ],
-    www_url                => [ s => "" ],
-    your_mom_is            => [ p => 5 ],
+    bananas_chance           => [ p => 0.02 ],
+    band_name                => [ p => 5 ],
+    band_var                 => [ s => 'band' ],
+    ex_to_sex                => [ p => 1 ],
+    file_input               => [ f => "" ],
+    haiku_report             => [ i => 1 ],
+    hide_hostmask            => [ b => 0 ],
+    history_size             => [ i => 30 ],
+    idle_source              => [ s => 'factoid' ],
+    identify_before_autojoin => [ b => 1 ],
+    increase_mute            => [ i => 60 ],
+    inventory_preload        => [ i => 0 ],
+    inventory_size           => [ i => 20 ],
+    item_drop_rate           => [ i => 3 ],
+    lookup_tla               => [ i => 10 ],
+    max_sub_length           => [ i => 80 ],
+    minimum_length           => [ i => 6 ],
+    nickserv_msg             => [ s => "" ],
+    nickserv_nick            => [ s => "NickServ" ],
+    random_item_cache_size   => [ i => 20 ],
+    random_wait              => [ i => 3 ],
+    repeated_queries         => [ i => 5 ],
+    squirrel_chance          => [ i => 20 ],
+    squirrel_shock           => [ i => 60 ],
+    timeout                  => [ i => 60 ],
+    uses_reply               => [ i => 5 ],
+    user_activity_timeout    => [ i => 360 ],
+    user_mode                => [ s => "+B" ],
+    value_cache_limit        => [ i => 1000 ],
+    www_root                 => [ s => "" ],
+    www_url                  => [ s => "" ],
+    your_mom_is              => [ p => 5 ],
 );
 
 our %gender_vars = (
@@ -668,7 +669,7 @@ sub irc_on_public {
             &say( $chl => "$who: $cmd what channel?" );
             return;
         }
-        $irc->yield( $cmd => $msg ? ($dst, $msg) : $dst );
+        $irc->yield( $cmd => $msg ? ( $dst, $msg ) : $dst );
         &say( $chl => "$who: ${cmd}ing $dst" );
         Report "${cmd}ing $dst at ${who}'s request";
     } elsif ( $addressed and $operator and lc $msg eq 'list ignored' ) {
@@ -1458,7 +1459,7 @@ sub irc_on_public {
             &load_gender($who);
             &say( $chl => "$who: I don't know how to refer to you!" );
         }
-    } elsif ( $addressed and $msg =~ /^what gender is ([-\w]+)\??$/ ) {
+    } elsif ( $addressed and $msg =~ /^what gender is ([-\w]+)\??$/i ) {
         if ( exists $stats{users}{genders}{ lc $1 } ) {
             &say( $chl => "$who: $1 is $stats{users}{genders}{lc $1}." );
         } else {
@@ -1949,8 +1950,8 @@ sub db_success {
         }
     } elsif ( $bag{cmd} eq 'load_gender' ) {
         my %line = ref $res->{RESULT} ? %{ $res->{RESULT} } : ();
-        $stats{users}{genders}{ lc $bag{nick} } = lc $line{gender}
-          || "androgynous";
+        $stats{users}{genders}{ lc $bag{nick} } =
+          lc( $line{gender} || "androgynous" );
     } elsif ( $bag{cmd} eq 'load_vars' ) {
         my @lines = ref $res->{RESULT} ? @{ $res->{RESULT} } : [];
         my ( @small, @large );
@@ -2033,7 +2034,7 @@ sub db_success {
         Log "Loaded vars:",
           &make_list(
             map { "$_ (" . scalar @{ $replacables{$_}{vals} } . ")" }
-              sort keys %replacables
+            sort keys %replacables
           );
     } elsif ( $bag{cmd} eq 'dump_var' ) {
         unless ( ref $res->{RESULT} ) {
@@ -2654,10 +2655,13 @@ sub irc_on_chan_sync {
 
 sub irc_on_connect {
     Log("Connected...");
-    Log("Identifying...");
-    if (my $pass = &config("password"))
-    {
+    if (&config("identify_before_autojoin")) {
+        Log("Identifying...");
         &say( nickserv => "identify $pass" );
+    } else {
+        Log("Skipping identify...");
+        $stats{identified} = 1;
+        $irc->yield( join => $channel );
     }
     Log("Done.");
 }
@@ -2803,7 +2807,7 @@ sub get_stats {
     $stats{last_updated} = time;
 
     # check if the log file was moved, if so, reopen it
-    if (&config("logfile") and not -f &config("logfile")) {
+    if ( &config("logfile") and not -f &config("logfile") ) {
         &open_log;
         Log "Reopened log file";
     }
@@ -3936,9 +3940,10 @@ sub seven {
 
 sub open_log {
     if ( &config("logfile") ) {
-        open( LOG, ">>",
-            DEBUG ? &config("logfile") . ".debug" : &config("logfile") )
+        my $logfile = DEBUG ? &config("logfile") . ".debug" : &config("logfile");
+        open( LOG, ">>", $logfile)
           or die "Can't write " . &config("logfile") . ": $!";
+        Log("Opened $logfile");
     }
 }
 
