@@ -17,12 +17,15 @@
 #
 # $Id: bucket.pl 685 2009-08-04 19:15:15Z dan $
 
+BEGIN { $ENV{POCOIRC_DEBUG} = 1; }
 use strict;
+use lib qw(lib);
 use POE;
 use POE::Component::IRC;
 use POE::Component::IRC::State;
 use POE::Component::IRC::Plugin::NickServID;
 use POE::Component::IRC::Plugin::Connector;
+#use POE::Component::IRC::Plugin::WWW::GetPageTitle::Bucket;
 use POE::Component::SimpleDBI;
 use Lingua::EN::Conjugate qw/past gerund/;
 use Lingua::EN::Inflect qw/A PL_N/;
@@ -185,7 +188,33 @@ if (my $pass = &config("password"))
     $irc->plugin_add( 'NickServID', POE::Component::IRC::Plugin::NickServID->new( Password => $pass ) );
 }
 
+
+# juicy flavor
+#$irc->plugin_add(
+#    'get_page_title' =>
+#        POE::Component::IRC::Plugin::WWW::GetPageTitle::Bucket->new(
+#            auto             => 1,
+#            response_event   => 'irc_get_page_title',
+#            trigger          => qr/^/,#$RE{URI}{HTTP},
+#            listen_for_input => [qw(public)],
+#            debug            => 1,
+#            addressed        => 0,
+#            eat              => 0,
+#            find_uris        => 1,
+#          )
+#);
+
 POE::Component::SimpleDBI->new('db') or die "Can't create DBI session";
+
+use Regexp::Common qw /URI/;
+use HTML::Entities;
+use POE::Component::Client::HTTP;
+POE::Component::Client::HTTP->spawn(
+    Agent           => 'Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10_6_2; en-us) AppleWebKit/531.21.8 (KHTML, like Gecko) Version/4.0.4 Safari/531.21.10',
+    Alias           => 'page_title_ua',    # defaults to 'weeble'
+    FollowRedirects => 2,                  # defaults to 0 (off)
+    Timeout         => 60,                 # defaults to 180 seconds
+);
 
 POE::Session->create(
     inline_states => {
@@ -209,6 +238,7 @@ POE::Session->create(
         db_success       => \&db_success,
         delayed_post     => \&delayed_post,
         heartbeat        => \&heartbeat,
+        get_title_response => \&get_title_response,
         #_default           => sub { 
         #     my ($event, $args) = @_[ARG0 .. $#_];
         #     print STDERR Data::Dumper::Dumper($event, $args);
@@ -283,6 +313,21 @@ sub irc_on_public {
     $bag{who}  = $who;
     $bag{chl}  = $chl;
     $bag{type} = $type;
+    
+    my @urls = $msg =~ /($RE{URI}{HTTP})/g;
+    if (@urls)
+    {
+        print STDERR "Making UA for $urls[0]\n";
+
+        my $args = {
+            channel => $chl, 
+            irc_session => $irc->session_id(),
+        };
+
+        my $request = HTTP::Request->new( GET => $urls[0] );
+        $poe_kernel->post('page_title_ua', 'request','get_title_response', $request, $args);
+        return;
+    }
 
     if ( not $stats{tail_time} or time - $stats{tail_time} > 60 ) {
         &tail( $_[KERNEL] );
@@ -3887,4 +3932,47 @@ sub open_log {
             DEBUG ? &config("logfile") . ".debug" : &config("logfile") )
           or die "Can't write " . &config("logfile") . ": $!";
     }
+}
+
+sub get_title_response
+{
+    #print STDERR "in get_title_response()\n";
+    my ($kernel, $self, $request_packet, $response_packet) = @_[KERNEL, OBJECT, ARG0, ARG1];
+    if (!$response_packet)
+    {
+        print STDERR "No request\n";
+        return;
+    }
+    my $args = $request_packet->[1];
+    # HTTP::Request
+    my $request_object  = $request_packet->[0];
+
+    # HTTP::Response
+    my $resp = $response_packet->[0];
+
+    #print STDERR "got: ", $resp->content(), "\n";
+
+    my $title = "";
+    if($resp->is_success()) 
+    {
+        if ($resp->content_type =~ /html/)
+        {
+            ( $title ) = $resp->decoded_content =~ m|<title[^>]*>(.+?)</title>|si;
+            $title ||= 'N/A';
+        }
+    }
+    else {
+        &say(delete $args->{channel}, "Error getting url: ". $resp->message());
+    }
+
+    if ($title)
+    {
+        $title =~ s/[[:cntrl:]]+//g;
+        $title = HTML::Entities::decode_entities($title);
+    }
+    #print STDERR "got title - $title\n";
+    #print STDERR Data::Dumper::Dumper($args);
+    #$irc->yield( privmsg => $channel => $title);
+    #$kernel->post( delete $args->{irc_session}, 'privmsg', delete $args->{channel}, $title);
+    &say(delete $args->{channel}, $title);
 }
