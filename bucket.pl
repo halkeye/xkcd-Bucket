@@ -938,7 +938,7 @@ sub irc_on_public {
         } else {
             &say( $chl => "$who: that was $id" );
         }
-    } elsif ( $addressed and $msg eq 'something random' ) {
+    } elsif ( $addressed and ($msg eq 'something random' or $msg eq 'do something') ) {
         &lookup(%bag);
     } elsif ( $addressed and $msg eq 'stats' ) {
         unless ( $stats{stats_cached} ) {
