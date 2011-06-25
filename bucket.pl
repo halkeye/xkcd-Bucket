@@ -3549,19 +3549,20 @@ sub read_rss {
 }
 
 sub get_band_name_handles {
-    if ( exists $handles{dbh} ) {
-        return \%handles;
-    }
-
     Log "Creating band name database/query handles";
-    unless ( $handles{dbh} ) {
-        $handles{dbh} =
-          DBI->connect( &config("db_dsn"), &config("db_username"),
-            &config("db_password") )
-          or Report "Failed to create dbh!" and return undef;
+    if ( $handles{dbh} )
+    {
+        eval { $handles{dbh}->ping() };
+        Report "Ping failure: $@" if $@;
+    }
+    $handles{dbh} ||= DBI->connect( &config("db_dsn"), &config("db_username"), &config("db_password") );
+    if (!$handles{dbh})
+    {
+        Report "Failed to create dbh!";
+        return undef;
     }
 
-    $handles{lookup} = $handles{dbh}->prepare(
+    $handles{lookup} ||= $handles{dbh}->prepare(
         "select id, word, `lines` 
                                   from word2id 
                                   where word in (?, ?, ?) 
@@ -3623,6 +3624,13 @@ sub check_band_name {
             Log "delaying processing $entry->{word} ($entry->{count})\n";
             $delayed = $entry;
         }
+    }
+
+    unless (@words) {
+        Log "No words found, new band declared";
+        $bag->{elapsed} = time - $bag->{start};
+        &add_new_band($bag);
+        return;
     }
 
     @words = sort { $a->{next_id} <=> $b->{next_id} } @words;
