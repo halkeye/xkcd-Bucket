@@ -83,7 +83,6 @@ my @random_items;
 my %replacables;
 my %history;
 my $bucket_log_fh;
-my %handles;
 
 my %config_keys = (
     bananas_chance           => [ p => 0.02 ],
@@ -2655,7 +2654,7 @@ sub irc_on_chan_sync {
 
 sub irc_on_connect {
     Log("Connected...");
-    if (&config("identify_before_autojoin")) {
+    if ((my $pass = &config("password")) && &config("identify_before_autojoin")) {
         Log("Identifying...");
         &say( nickserv => "identify $pass" );
     } else {
@@ -3552,28 +3551,37 @@ sub read_rss {
     return ();
 }
 
-sub get_band_name_handles {
-    Log "Creating band name database/query handles";
-    if ( $handles{dbh} )
-    {
-        eval { $handles{dbh}->ping() };
-        Report "Ping failure: $@" if $@;
-    }
-    $handles{dbh} ||= DBI->connect( &config("db_dsn"), &config("db_username"), &config("db_password") );
-    if (!$handles{dbh})
-    {
-        Report "Failed to create dbh!";
-        return undef;
-    }
+{
+    my %handles;
+    sub get_band_name_handles {
+        Log "Creating band name database/query handles";
+        if ( $handles{dbh} )
+        {
+            eval { 
+                if (!$handles{dbh}->ping())
+                {
+                    $handles{dbh} = undef;
+                    $handles{lookup} = undef;
+                }
+            };
+            Report "Ping failure: $@" if $@;
+        }
+        $handles{dbh} ||= DBI->connect( &config("db_dsn"), &config("db_username"), &config("db_password") );
+        if (!$handles{dbh})
+        {
+            Report "Failed to create dbh!";
+            return undef;
+        }
 
-    $handles{lookup} ||= $handles{dbh}->prepare(
-        "select id, word, `lines` 
-                                  from word2id 
-                                  where word in (?, ?, ?) 
-                                  order by `lines`"
-    );
+        $handles{lookup} ||= $handles{dbh}->prepare(
+            "select id, word, `lines` 
+                                      from word2id 
+                                      where word in (?, ?, ?) 
+                                      order by `lines`"
+        );
 
-    return \%handles;
+        return \%handles;
+    }
 }
 
 sub check_band_name {
