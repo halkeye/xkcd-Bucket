@@ -314,21 +314,6 @@ sub irc_on_public {
     $bag{chl}  = $chl;
     $bag{type} = $type;
     
-    my @urls = $msg =~ /($RE{URI}{HTTP})/g;
-    if (@urls)
-    {
-        print STDERR "Making UA for $urls[0]\n";
-
-        my $args = {
-            channel => $chl, 
-            irc_session => $irc->session_id(),
-        };
-
-        my $request = HTTP::Request->new( GET => $urls[0] );
-        $poe_kernel->post('page_title_ua', 'request','get_title_response', $request, $args);
-        return;
-    }
-
     if ( not $stats{tail_time} or time - $stats{tail_time} > 60 ) {
         &tail( $_[KERNEL] );
         $stats{tail_time} = time;
@@ -1545,6 +1530,21 @@ sub irc_on_public {
                 orig => $orig,
             );
         }
+    }
+
+    my @urls = $msg =~ /($RE{URI}{HTTP})/g;
+    if (@urls)
+    {
+        print STDERR "Making UA for $urls[0]\n";
+
+        my $args = {
+            channel => $chl, 
+            irc_session => $irc->session_id(),
+        };
+
+        my $request = HTTP::Request->new( GET => $urls[0] );
+        $poe_kernel->post('page_title_ua', 'request','get_title_response', $request, $args);
+        return;
     }
 }
 
