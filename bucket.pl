@@ -17,8 +17,12 @@
 #
 # $Id: bucket.pl 685 2009-08-04 19:15:15Z dan $
 
-BEGIN { $ENV{POCOIRC_DEBUG} = 1; }
+#BEGIN { $ENV{POCOIRC_DEBUG} = 1; }
 use strict;
+BEGIN { 
+    use FindBin;
+    chdir $FindBin::Bin; 
+}
 use lib qw(lib);
 use POE;
 use POE::Component::IRC;
@@ -99,6 +103,7 @@ my %config_keys = (
     inventory_preload        => [ i => 0 ],
     inventory_size           => [ i => 20 ],
     item_drop_rate           => [ i => 3 ],
+    logfileOnly              => [ b => 0 ],
     lookup_tla               => [ i => 10 ],
     max_sub_length           => [ i => 80 ],
     minimum_length           => [ i => 6 ],
@@ -250,7 +255,9 @@ POE::Kernel->run;
 print "POE::Kernel has left the building.\n";
 
 sub Log {
-    print scalar localtime, " - @_\n";
+    if ( !&config("logfileOnly")) {
+        print scalar localtime, " - @_\n";
+    }
     if ( &config("logfile") ) {
         print LOG scalar localtime, " - @_\n";
     }
@@ -307,6 +314,7 @@ sub irc_on_public {
     my $chl   = $_[ARG1];
     $chl = $chl->[0] if ref $chl eq 'ARRAY';
     my $msg = $_[ARG2];
+    my @urls = $msg =~ /($RE{URI}{HTTP})/g;
     $msg =~ s/\s\s+/ /g;
     my %bag;
 
@@ -335,7 +343,7 @@ sub irc_on_public {
         $msg =~ s/^(\S+)://;
         $bag{to} = $1;
     }
-
+    
     if ( &config("history_size") and &config("history_size") > 0 ) {
         if ( &config("haiku_report")
             and not( $addressed and $msg =~ /^how many syllables\??$/i ) )
@@ -418,7 +426,7 @@ sub irc_on_public {
             return;
         }
     }
-
+        
     $msg =~ s/^\s+|\s+$//g;
 
     # == 0 - shut up by operator
@@ -1476,6 +1484,22 @@ sub irc_on_public {
     } else {
         my $orig = $msg;
         $msg = &trim($msg);
+
+        if (@urls)
+        {
+            Log("Making UA for $urls[0]");
+
+            my $args = {
+                channel => $chl, 
+                irc_session => $irc->session_id(),
+            };
+
+            my $request = HTTP::Request->new( GET => $urls[0] );
+            $poe_kernel->post('page_title_ua', 'request','get_title_response', $request, $args);
+        }
+
+
+
         if (   $addressed
             or length $msg >= &config("minimum_length")
             or $msg eq '...' )
@@ -1530,21 +1554,6 @@ sub irc_on_public {
                 orig => $orig,
             );
         }
-    }
-
-    my @urls = $msg =~ /($RE{URI}{HTTP})/g;
-    if (@urls)
-    {
-        print STDERR "Making UA for $urls[0]\n";
-
-        my $args = {
-            channel => $chl, 
-            irc_session => $irc->session_id(),
-        };
-
-        my $request = HTTP::Request->new( GET => $urls[0] );
-        $poe_kernel->post('page_title_ua', 'request','get_title_response', $request, $args);
-        return;
     }
 }
 
@@ -3961,7 +3970,7 @@ sub get_title_response
     my ($kernel, $self, $request_packet, $response_packet) = @_[KERNEL, OBJECT, ARG0, ARG1];
     if (!$response_packet)
     {
-        print STDERR "No request\n";
+        Log("No request");
         return;
     }
     my $args = $request_packet->[1];
@@ -3990,8 +3999,9 @@ sub get_title_response
     {
         $title =~ s/[[:cntrl:]]+//g;
         $title = HTML::Entities::decode_entities($title);
+        $title =~ s/\s+/ /g;
     }
-    #print STDERR "got title - $title\n";
+    Log("got title - $title");
     #print STDERR Data::Dumper::Dumper($args);
     #$irc->yield( privmsg => $channel => $title);
     #$kernel->post( delete $args->{irc_session}, 'privmsg', delete $args->{channel}, $title);
